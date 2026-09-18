@@ -1,0 +1,82 @@
+import { api, type DiaryEvent, type Summary } from "./api";
+import { clock, el } from "./util";
+
+export interface DiaryView {
+  root: HTMLElement;
+  reload(): Promise<DiaryEvent[]>;
+  /** Pre-fill the time field (seconds from record start), e.g. from the strip cursor. */
+  prefill(sec: number): void;
+}
+
+/**
+ * Symptom diary. Reading a Holter starts here (ISHNE 2017 §4.1; Medmastery): every
+ * entry is shown with what the rhythm did in the two minutes around it, so the
+ * symptom-rhythm correlation is answered in one line, and each entry jumps to the strip.
+ */
+export function createDiary(sum: Summary, onJump: (sec: number) => void, onChanged: () => void): DiaryView {
+  const root = el("div", "side-tab diary");
+  const startIso = sum.record.start;
+  const start = new Date(startIso.replace(" ", "T"));
+
+  const form = el("form", "diary-form");
+  const time = el("input", "inp mono") as HTMLInputElement; time.type = "text"; time.placeholder = "чч:мм"; time.pattern = "([01]?\\d|2[0-3]):[0-5]\\d"; time.required = true;
+  const text = el("input", "inp") as HTMLInputElement; text.placeholder = "симптом: сердцебиение, головокружение…"; text.maxLength = 200;
+  const add = el("button", "btn", "добавить"); add.type = "submit";
+  form.append(time, text, add);
+  const hint = el("div", "muted diary-hint", "время по часам пациента; запись с 10:50 идёт через полночь, дата выбирается сама");
+  const list = el("div", "eps");
+  root.append(form, hint, list);
+
+  function secOf(hhmm: string): number | null {
+    const [h, m] = hhmm.split(":").map(Number);
+    if (Number.isNaN(h)) return null;
+    const d = new Date(start); d.setHours(h, m, 0, 0);
+    let sec = (d.getTime() - start.getTime()) / 1000;
+    if (sec < 0) sec += 86400;                      // past midnight belongs to the next day
+    return sec >= 0 && sec <= sum.record.duration_s ? sec : null;
+  }
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const sec = secOf(time.value);
+    if (sec === null) { hint.textContent = "это время не попадает в запись"; return; }
+    await api.addEvent(Math.round(sec * 1000), text.value);
+    text.value = "";
+    await reload(); onChanged();
+  });
+
+  async function reload(): Promise<DiaryEvent[]> {
+    const evs = await api.events();
+    list.innerHTML = "";
+    if (!evs.length) list.append(el("div", "bp-empty", "Записей дневника нет. Введите время симптома, и рядом появится, что делал ритм в эти минуты."));
+    for (const ev of evs) {
+      const row = el("div", "ep-row diary-row");
+      row.append(el("div", "t", clock(startIso, ev.t_ms / 1000).slice(0, 5)));
+      const body = el("div");
+      body.append(el("div", "title", ev.text || "симптом"));
+      const parts: string[] = [];
+      if (ev.hr !== null) parts.push(`ЧСС ${ev.hr} (${ev.hr_min}–${ev.hr_max})`);
+      parts.push(ev.v ? `ЖЭС ${ev.v}` : "ЖЭС нет", ev.s ? `НЖЭС ${ev.s}` : "НЖЭС нет");
+      if (ev.episodes.length) parts.push(`эпизодов: ${ev.episodes.length}`);
+      if (ev.noise >= 0.5) parts.push("помеха");
+      const why = el("div", "why mono", `±2 мин: ${parts.join(" · ")}`);
+      body.append(why);
+      const verdict = el("div", "why diary-verdict",
+        ev.episodes.length || ev.v || ev.s ? "есть с чем сопоставить" : ev.hr !== null && (ev.hr_max ?? 0) > 100 ? "тахикардия без эктопии" : "ритм без особенностей");
+      body.append(verdict);
+      row.append(body);
+      const del = el("button", "ibtn diary-del", "×"); del.title = "удалить";
+      del.addEventListener("click", async (e) => { e.stopPropagation(); await api.delEvent(ev.id); await reload(); onChanged(); });
+      row.append(del);
+      row.addEventListener("click", () => onJump(ev.t_ms / 1000));
+      list.append(row);
+    }
+    return evs;
+  }
+
+  return {
+    root,
+    reload,
+    prefill(sec) { time.value = clock(startIso, sec).slice(0, 5); text.focus(); },
+  };
+}

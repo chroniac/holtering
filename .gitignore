@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+cache/
+frontend/node_modules/
+frontend/dist/
+out/
+data/
+*.scp
+*.edf
