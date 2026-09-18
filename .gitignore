@@ -8,3 +8,7 @@ out/
 data/
 *.scp
 *.edf
+*.overrides.json
+qrs.txt
+rr.txt
+nn.txt
