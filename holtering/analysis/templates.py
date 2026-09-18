@@ -6,10 +6,11 @@ median-centred and L2-normalised. Assignment is greedy correlation matching
 (>= CORR_MIN joins an existing template, otherwise a new one is opened), then
 one refinement pass reassigns everything to the nearest template mean.
 
-Windows are taken on a 125 Hz grid whatever the record's sample rate (every
-fs/125-th sample), so a 500 Hz recording clusters in the same 75 dimensions at
-the same cost instead of 4x the memory and time; shape at 125 Hz is what the
-correlation threshold was tuned on.
+Windows are taken on a 125 Hz grid whatever the record's sample rate: each grid
+point is the mean of the fs/125 raw samples around it (box decimation, so pacing
+spikes and impulsive artefact are averaged rather than aliased into the shape).
+A 500 Hz recording therefore clusters in the same 75 dimensions at the same
+cost, and the correlation threshold tuned at 125 Hz keeps its meaning.
 """
 
 from __future__ import annotations
@@ -33,14 +34,20 @@ def beat_windows(read, n_samples: int, fs: int, mv: float, t_ms: np.ndarray):
     `read(ch, a, b)` returns raw int16; each lead is read once, sequentially."""
     step = grid_step(fs)
     idx = np.round(t_ms * fs / 1000).astype(np.int64)
-    reach = HALF * step
-    valid = (idx >= reach) & (idx < n_samples - reach - 1)
+    # centred box of width `step` around each grid point; an even width takes step+1
+    # samples with half weight at both ends so the centre never shifts by half a sample
+    if step % 2:
+        sub = np.arange(-(step // 2), step // 2 + 1); wts = np.full(step, 1.0 / step, np.float32)
+    else:
+        sub = np.arange(-(step // 2), step // 2 + 1); wts = np.full(step + 1, 1.0 / step, np.float32); wts[[0, -1]] = 0.5 / step
+    lo, hi = HALF * step - sub[0], HALF * step + sub[-1] + 1
+    valid = (idx >= lo) & (idx < n_samples - hi)
     offs = np.arange(-HALF, HALF + 1) * step
-    gather = idx[valid][:, None] + offs[None, :]
+    gather = idx[valid][:, None, None] + offs[None, :, None] + sub[None, None, :]
     out = np.zeros((len(idx), len(LEADS_T), 2 * HALF + 1), np.float32)
     for li, ch in enumerate(LEADS_T):
         lead = read(ch, 0, n_samples)
-        out[valid, li] = lead[gather].astype(np.float32) * mv
+        out[valid, li] = (lead[gather].astype(np.float32) @ wts) * mv
         del lead
     return out.reshape(len(idx), -1), valid
 
@@ -69,10 +76,14 @@ def cluster(w: np.ndarray, valid: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
             rest = sel[~ok]
         else:
             rest = sel
-        for k in rest:                                   # open new templates one by one
+        for pos, k in enumerate(rest):                   # open new templates one by one
+            if nt >= MAX_TEMPLATES:                      # set is frozen: the rest is one batched argmax
+                tail = rest[pos:]
+                assign[tail] = (x[tail] @ tm[:nt].T).argmax(axis=1)
+                break
             if nt:
                 c = tm[:nt] @ x[k]; j = int(c.argmax())
-                if c[j] >= CORR_MIN or nt >= MAX_TEMPLATES:
+                if c[j] >= CORR_MIN:
                     assign[k] = j; continue
             tm[nt] = x[k]; assign[k] = nt; nt += 1
     # refinement: template = mean of members, reassign

@@ -11,12 +11,19 @@ import numpy as np
 
 INDEPENDENT = [0, 1, 6, 7, 8, 9, 10, 11]
 WINDOW_S = 2                    # quality is scored per 2 s so shading hugs the artefact
-SMOOTH = 13                     # ~100 ms moving average at 125 Hz
-STEP_MV = 0.5                   # sample-to-sample jump that never happens in clean ECG
+SMOOTH_S = 0.104                # ~100 ms moving average (13 samples at 125 Hz, where it was tuned)
+STEP_S = 0.008                  # jump measured over 8 ms (one sample at 125 Hz)...
+STEP_MV = 0.5                   # ...of 0.5 mV never happens in clean ECG
 RAIL = 32000                    # ADC saturation
-WANDER_SMOOTH = 50              # 0.4 s moving average: keeps baseline drift, drops QRS/T
+WANDER_S = 0.4                  # 0.4 s moving average: keeps baseline drift, drops QRS/T
 WANDER_MIN_MV = 1.5             # absolute floor for "drift" (respiration stays well below)
 WANDER_RATIO = 4.0              # ...and it must also be 4x the channel's typical drift
+
+
+def samples(seconds: float, fs: int, at_least: int = 1) -> int:
+    """Window lengths are defined in seconds and derived per record: a 500 Hz recording
+    must get the same 100 ms smoother, not 13 samples of 26 ms."""
+    return max(at_least, int(round(seconds * fs)))
 
 
 def running_sum(x: np.ndarray, dtype=np.float64) -> np.ndarray:
@@ -52,14 +59,14 @@ def box_same(x: np.ndarray, k: int) -> np.ndarray:
     return box_from_sum(running_sum(x), k)
 
 
-def hf_residual(x: np.ndarray) -> np.ndarray:
-    """High-frequency residual after a short moving average, along the last axis."""
-    return x - box_same(x, SMOOTH)
+def hf_residual(x: np.ndarray, fs: int) -> np.ndarray:
+    """High-frequency residual after a ~100 ms moving average, along the last axis."""
+    return x - box_same(x, samples(SMOOTH_S, fs))
 
 
-def baseline(x: np.ndarray) -> np.ndarray:
+def baseline(x: np.ndarray, fs: int) -> np.ndarray:
     """Slow component (0.4 s moving average) along the last axis."""
-    return box_same(x, WANDER_SMOOTH)
+    return box_same(x, samples(WANDER_S, fs))
 
 
 def window_metrics(read, n_samples: int, fs: int, mv_per_lsb: float, window_s: int = WINDOW_S):
@@ -80,6 +87,7 @@ def window_metrics(read, n_samples: int, fs: int, mv_per_lsb: float, window_s: i
     wander = np.zeros((n_win, n_ch), np.float32)
     per_chunk = max(1, 450_000 // win)                   # ~450k samples per channel-chunk (1 h at 125 Hz):
     step_lsb = STEP_MV / abs(mv_per_lsb)                  # temporaries stay ~20 MB per worker at any sample rate
+    k_hf, k_slow, lag = samples(SMOOTH_S, fs), samples(WANDER_S, fs), samples(STEP_S, fs)
 
     def one(ci: int, ch: int, a: int, b: int, w0: int, w1: int) -> None:
         k = w1 - w0
@@ -88,11 +96,12 @@ def window_metrics(read, n_samples: int, fs: int, mv_per_lsb: float, window_s: i
         # one exact integer running sum feeds both moving averages
         c = running_sum(raw, np.int64)
         x = raw * mv_per_lsb                              # float64, no float32 rounding
-        res = (x - box_from_sum(c, SMOOTH, mv_per_lsb)).reshape(k, win)
+        res = (x - box_from_sum(c, k_hf, mv_per_lsb)).reshape(k, win)
         hf[w0:w1, ci] = res.std(axis=1)
-        steps[w0:w1, ci] = (np.abs(np.diff(rr.astype(np.int32), axis=1)) > step_lsb).mean(axis=1)
+        r32 = rr.astype(np.int32)
+        steps[w0:w1, ci] = (np.abs(r32[:, lag:] - r32[:, :-lag]) > step_lsb).mean(axis=1)
         rails[w0:w1, ci] = ((rr >= RAIL) | (rr <= -RAIL)).mean(axis=1)
-        slow = box_from_sum(c, WANDER_SMOOTH, mv_per_lsb).reshape(k, win)
+        slow = box_from_sum(c, k_slow, mv_per_lsb).reshape(k, win)
         wander[w0:w1, ci] = slow.max(axis=1) - slow.min(axis=1)
 
     # numpy releases the GIL inside cumsum / reductions, so channels run in parallel;
@@ -141,19 +150,21 @@ def gap_artifact(mm: np.memmap, fs: int, mv_per_lsb: float, t0_ms: int, t1_ms: i
     single-sample jumps > 5 mV, range > 3x the local QRS amplitude, or HF residual
     > 2.5x the record baseline all mean the detector went blind, not the heart.
     """
-    a = int(t0_ms * fs / 1000) + 8; b = int(t1_ms * fs / 1000) - 8
+    margin = samples(0.064, fs)                            # keep clear of the QRS on both sides
+    a = int(t0_ms * fs / 1000) + margin; b = int(t1_ms * fs / 1000) - margin
     if b - a < fs // 4:
         return False, "интервал короче 250 мс"
     raw = np.asarray(mm[INDEPENDENT, a:b])
     x = raw.astype(np.float32) * mv_per_lsb
-    rails = float((np.abs(raw) >= RAIL).mean())
-    max_step = float(np.abs(np.diff(x, axis=1)).max())
+    rails = float(((raw >= RAIL) | (raw <= -RAIL)).mean())
+    lag = samples(STEP_S, fs)
+    max_step = float(np.abs(x[:, lag:] - x[:, :-lag]).max())
     rng = float((x.max(axis=1) - x.min(axis=1)).max())
-    hf = float(hf_residual(x[INDEPENDENT.index(1)]).std())
+    hf = float(hf_residual(x[INDEPENDENT.index(1)], fs).std())
     if rails > 0:
         return True, f"зашкал АЦП, {rails:.0%} отсчётов"
     if max_step > 5.0:
-        return True, f"скачок {max_step:.1f} мВ за отсчёт"
+        return True, f"скачок {max_step:.1f} мВ за {int(round(1000 * lag / fs))} мс"
     if rng > 3.0 * qrs_amp_mv:
         return True, f"размах {rng:.1f} мВ, ×{rng / qrs_amp_mv:.1f} к QRS"
     if hf > 2.5 * hf_base_mv:
@@ -164,7 +175,7 @@ def gap_artifact(mm: np.memmap, fs: int, mv_per_lsb: float, t0_ms: int, t1_ms: i
 def local_noise(mm: np.memmap, fs: int, mv_per_lsb: float, i: int, half_s: float = 0.5, ch: int = 1) -> float:
     a = max(0, i - int(half_s * fs)); b = min(mm.shape[1], i + int(half_s * fs))
     x = np.asarray(mm[ch, a:b]).astype(np.float32) * mv_per_lsb
-    return float(hf_residual(x).std())
+    return float(hf_residual(x, fs).std())
 
 
 def missed_beat(mm: np.memmap, fs: int, mv_per_lsb: float, t0_ms: int, t1_ms: int,
@@ -179,12 +190,13 @@ def missed_beat(mm: np.memmap, fs: int, mv_per_lsb: float, t0_ms: int, t1_ms: in
     if hi - lo < fs // 5:
         return False, ""
     hits = 0; where = None
+    lag, reach = samples(STEP_S, fs), samples(0.04, fs)
     for ch in (1, 7, 8):
         x = np.asarray(mm[ch, lo:hi]).astype(np.float32) * mv_per_lsb
         x = x - np.median(x)
-        d = np.abs(np.diff(x))
+        d = np.abs(x[lag:] - x[:-lag])                      # slew over 8 ms, whatever the sample rate
         peak = int(np.argmax(np.abs(x)))
-        sharp = d[max(0, peak - 5):peak + 5].max() if len(d) else 0.0
+        sharp = d[max(0, peak - reach):peak + reach].max() if len(d) else 0.0
         if abs(x[peak]) >= 0.5 * qrs_amp_mv and sharp >= 0.25 * qrs_amp_mv:
             hits += 1; where = lo + peak
     if hits >= 2 and where is not None:

@@ -32,13 +32,24 @@ VERDICT_RU = {
 }
 
 WIDTH_LEADS = [1, 7, 8]          # II + two strong chest channels
-WIDTH_FRAC, WIDTH_GAP = 0.15, 1  # slope threshold / bridged gap, calibrated on the median beat (80 ms)
+WIDTH_FRAC = 0.15                # slope threshold, calibrated on the median beat (80 ms)
+WIDTH_GAP_S = 0.008              # bridged gap in the slope run (one sample at 125 Hz)
+SLOPE_SMOOTH_S = 0.024           # |dx| smoother (3 samples at 125 Hz)
+AMP_HALF_S, WIDTH_HALF_S, EDGE_S = 0.048, 0.16, 0.2
 
 
-def qrs_duration_ms(x: np.ndarray, fs: int, frac: float = WIDTH_FRAC, gap: int = WIDTH_GAP) -> float:
-    """Span around the max-slope point where the smoothed |dx| stays above frac*max."""
-    d = np.abs(np.diff(x.astype(np.float64)))
-    d = np.convolve(d, np.ones(3) / 3, mode="same")
+def _n(seconds: float, fs: int, at_least: int = 1) -> int:
+    return max(at_least, int(round(seconds * fs)))
+
+
+def qrs_duration_ms(x: np.ndarray, fs: int, frac: float = WIDTH_FRAC) -> float:
+    """Span around the max-slope point where the smoothed |dx| stays above frac*max.
+    Slope is taken over 8 ms and smoothed over 24 ms whatever the sample rate, so the
+    threshold calibrated at 125 Hz means the same thing at 500 Hz."""
+    gap, lag, sm = _n(WIDTH_GAP_S, fs), _n(0.008, fs), _n(SLOPE_SMOOTH_S, fs, 3)
+    xf = x.astype(np.float64)
+    d = np.abs(xf[lag:] - xf[:-lag])
+    d = np.convolve(d, np.ones(sm) / sm, mode="same")
     pk = int(np.argmax(d)); thr = frac * d[pk]
     on = d > thr
     l = pk; miss = 0
@@ -53,7 +64,7 @@ def qrs_duration_ms(x: np.ndarray, fs: int, frac: float = WIDTH_FRAC, gap: int =
         elif miss < gap: r += 1; miss += 1
         else: break
     r -= miss
-    return (r - l + 2) * 1000.0 / fs
+    return (r - l + 1 + lag) * 1000.0 / fs
 
 
 @dataclass
@@ -87,16 +98,17 @@ class BeatAuditor:
         self.noise_base = noise_base_ii
         self.noise10, self.window_s = noise10, window_s
         self.rr = np.diff(t_ms)
+        self.amp_half, self.width_half, self.edge = _n(AMP_HALF_S, fs), _n(WIDTH_HALF_S, fs), _n(EDGE_S, fs)
         self.hour_amp = self._hourly_n_amplitude()
         self.n_width = self._sinus_width()
 
     # ---- calibration on N beats -----------------------------------------
     def _amp(self, i: int) -> float:
-        s = np.asarray(self.mm[1, i - 6:i + 7]).astype(np.float32) * self.mv
+        s = np.asarray(self.mm[1, i - self.amp_half:i + self.amp_half + 1]).astype(np.float32) * self.mv
         return float(np.abs(s - np.median(s)).max())
 
     def _width(self, i: int) -> float:
-        a, b = i - 20, i + 21
+        a, b = i - self.width_half, i + self.width_half + 1
         return float(np.median([qrs_duration_ms(np.asarray(self.mm[ch, a:b]), self.fs) for ch in WIDTH_LEADS]))
 
     def _sample_n(self, hour: int, per_hour: int, stride: int) -> list[int]:
@@ -108,7 +120,7 @@ class BeatAuditor:
         out = {}
         hours = int(self.t[-1] / 3.6e6) + 1
         for h in range(hours):
-            idx = [i for i in self._sample_n(h, 150, 200) if 7 <= i < self.n - 7]
+            idx = [i for i in self._sample_n(h, 150, 200) if self.amp_half + 1 <= i < self.n - self.amp_half - 1]
             out[h] = float(np.median([self._amp(i) for i in idx])) if idx else float("nan")
         return out
 
@@ -116,7 +128,7 @@ class BeatAuditor:
         hours = int(self.t[-1] / 3.6e6) + 1
         ws = []
         for h in range(hours):
-            ws += [self._width(i) for i in self._sample_n(h, 40, 400) if 20 <= i < self.n - 21]
+            ws += [self._width(i) for i in self._sample_n(h, 40, 400) if self.width_half <= i < self.n - self.width_half - 1]
         return float(np.median(ws)) if ws else float("nan")
 
     # ---- audit ------------------------------------------------------------
@@ -129,7 +141,7 @@ class BeatAuditor:
         k = int(k)
         b = BeatAudit(index=k, t_ms=t, label=lab, verdict="likely", confidence=0.8,
                       rr_pre=rr_pre, rr_post=rr_post)
-        if i < 25 or i >= self.n - 25:
+        if i < self.edge or i >= self.n - self.edge:
             b.verdict, b.confidence = "uncertain", 0.3
             b.reasons.append("edge of record")
             return b

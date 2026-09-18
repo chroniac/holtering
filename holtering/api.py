@@ -125,8 +125,8 @@ def create_app(st: State) -> FastAPI:
         a = int(round(start * st.fs)); b = min(st.mm.shape[1], a + int(round(dur * st.fs)))
         raw = np.asarray(st.mm[pick, a:b]).astype(np.float32) * st.mv
         sig = raw - np.median(raw, axis=1, keepdims=True)
-        noise = hf_residual(sig).std(axis=1) / st.analysis["calibration"]["noise_base_ii_mv"]
-        slow = baseline(sig); drift = slow.max(axis=1) - slow.min(axis=1)
+        noise = hf_residual(sig, st.fs).std(axis=1) / st.analysis["calibration"]["noise_base_ii_mv"]
+        slow = baseline(sig, st.fs); drift = slow.max(axis=1) - slow.min(axis=1)
         drift_thr = max(WANDER_MIN_MV, WANDER_RATIO * st.analysis["calibration"]["wander_base_ii_mv"])
         return {"start": start, "fs": st.fs, "leads": [names[i] for i in pick],
                 "data": [np.round(row, 3).tolist() for row in sig],
