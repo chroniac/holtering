@@ -84,6 +84,23 @@ def memmap(path: str, meta: SignalMeta) -> "np.memmap":
                      shape=(meta.n_leads, meta.n_samples))
 
 
+def read_lead(path: str, meta: SignalMeta, lead: int, a: int, b: int) -> "np.ndarray":
+    """Raw int16 samples [a, b) of one lead, read straight from the file.
+
+    Unlike slicing the memmap this does not map the touched pages into the process
+    (the OS may still cache them), so a sequential pass over a 24 h record leaves
+    RSS where it was."""
+    import numpy as np
+
+    if not 0 <= lead < meta.n_leads:
+        raise IndexError(f"lead {lead} out of range 0..{meta.n_leads - 1}")
+    a = max(0, a); b = min(meta.n_samples, b)
+    if b <= a:
+        return np.empty(0, "<i2")
+    off = meta.data_offset + (lead * meta.n_samples + a) * SAMPLE_BYTES
+    return np.fromfile(path, dtype="<i2", count=b - a, offset=off)
+
+
 def sample_window(meta: SignalMeta, start_s: float, dur_s: float | None) -> tuple[int, int]:
     """Clamp a seconds range to an inclusive-exclusive sample range."""
     a = max(0, min(meta.n_samples, int(round(start_s * meta.fs))))

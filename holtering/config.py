@@ -28,7 +28,8 @@ class Config:
     def cache_file(self) -> Path:
         st = self.scp.stat()
         g = f"-g{self.gain:g}" if self.gain is not None else ""
-        return self.cache_dir / f"{self.scp.stem}-{st.st_size}-{int(st.st_mtime)}{g}.json"
+        inv = "-inv" if self.invert else ""
+        return self.cache_dir / f"{self.scp.stem}-{st.st_size}-{int(st.st_mtime)}{g}{inv}.json"
 
 
 def _guess_start(scp: Path) -> datetime | None:

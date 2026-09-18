@@ -19,45 +19,89 @@ WANDER_MIN_MV = 1.5             # absolute floor for "drift" (respiration stays 
 WANDER_RATIO = 4.0              # ...and it must also be 4x the channel's typical drift
 
 
+def running_sum(x: np.ndarray, dtype=np.float64) -> np.ndarray:
+    """c[i] = sum(x[:i]) along the last axis, length n+1. int64 on raw int16 is exact."""
+    n = x.shape[-1]
+    c = np.zeros(x.shape[:-1] + (n + 1,), dtype)
+    np.cumsum(x, axis=-1, dtype=dtype, out=c[..., 1:])
+    return c
+
+
+def box_from_sum(c: np.ndarray, k: int, scale: float = 1.0) -> np.ndarray:
+    """Moving average of width k from a running sum, with exactly the alignment and
+    zero-padded edges of np.convolve(x, ones(k)/k, mode="same"): O(n), one slice
+    difference for the interior and two short ones for the edges. `scale` folds a
+    unit conversion (mV per LSB) into the final multiply."""
+    n = c.shape[-1] - 1
+    hi, lo = (k - 1) // 2 + 1, k // 2                   # out[i] = c[min(i+hi, n)] - c[max(i-lo, 0)]
+    out = np.empty(c.shape[:-1] + (n,), np.float64)
+    if n <= k:                                          # window covers everything: clip both ends
+        i = np.arange(n)
+        out[...] = c[..., np.minimum(i + hi, n)] - c[..., np.maximum(i - lo, 0)]
+    else:
+        out[..., lo:n - hi + 1] = c[..., lo + hi:n + 1] - c[..., 0:n - hi + 1 - lo]
+        out[..., :lo] = c[..., hi:hi + lo] - c[..., :1]
+        out[..., n - hi + 1:] = c[..., n:] - c[..., n - hi + 1 - lo:n - lo]
+    out *= scale / k
+    return out
+
+
+def box_same(x: np.ndarray, k: int) -> np.ndarray:
+    """np.convolve(x, ones(k)/k, mode="same") in O(n) instead of O(n*k); float64
+    accumulation keeps it within 1e-12 of the direct convolution."""
+    return box_from_sum(running_sum(x), k)
+
+
 def hf_residual(x: np.ndarray) -> np.ndarray:
     """High-frequency residual after a short moving average, along the last axis."""
-    k = np.ones(SMOOTH) / SMOOTH
-    if x.ndim == 1:
-        return x - np.convolve(x, k, mode="same")
-    return x - np.apply_along_axis(lambda r: np.convolve(r, k, mode="same"), -1, x)
+    return x - box_same(x, SMOOTH)
 
 
 def baseline(x: np.ndarray) -> np.ndarray:
     """Slow component (0.4 s moving average) along the last axis."""
-    k = np.ones(WANDER_SMOOTH) / WANDER_SMOOTH
-    if x.ndim == 1:
-        return np.convolve(x, k, mode="same")
-    return np.apply_along_axis(lambda r: np.convolve(r, k, mode="same"), -1, x)
+    return box_same(x, WANDER_SMOOTH)
 
 
-def window_metrics(mm: np.memmap, fs: int, mv_per_lsb: float, window_s: int = WINDOW_S):
+def window_metrics(read, n_samples: int, fs: int, mv_per_lsb: float, window_s: int = WINDOW_S):
     """Per window and per independent channel: HF RMS (mV), step fraction, rail hits,
-    baseline wander (peak-to-peak of the slow component, mV)."""
-    n_win = mm.shape[1] // (fs * window_s)
+    baseline wander (peak-to-peak of the slow component, mV).
+
+    `read(ch, a, b)` returns raw int16 samples; it is called one channel and one hour at
+    a time so the working set stays at a few tens of MB whatever the record length or
+    sample rate (a memmap would pin every page it touched into RSS)."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    win = fs * window_s
+    n_win = n_samples // win
     n_ch = len(INDEPENDENT)
     hf = np.zeros((n_win, n_ch), np.float32)
     steps = np.zeros((n_win, n_ch), np.float32)
     rails = np.zeros((n_win, n_ch), np.float32)
     wander = np.zeros((n_win, n_ch), np.float32)
-    per_chunk = 1800                                      # windows per chunk (1 h)
-    for w0 in range(0, n_win, per_chunk):
-        w1 = min(n_win, w0 + per_chunk)
-        a, b = w0 * fs * window_s, w1 * fs * window_s
-        raw = np.asarray(mm[INDEPENDENT, a:b])
-        x = raw.astype(np.float32) * mv_per_lsb          # (8, samples)
+    per_chunk = max(1, 450_000 // win)                   # ~450k samples per channel-chunk (1 h at 125 Hz):
+    step_lsb = STEP_MV / abs(mv_per_lsb)                  # temporaries stay ~20 MB per worker at any sample rate
+
+    def one(ci: int, ch: int, a: int, b: int, w0: int, w1: int) -> None:
         k = w1 - w0
-        xs = x.reshape(n_ch, k, fs * window_s)
-        res = hf_residual(x).reshape(n_ch, k, fs * window_s)
-        hf[w0:w1] = res.std(axis=2).T
-        steps[w0:w1] = (np.abs(np.diff(xs, axis=2)) > STEP_MV).mean(axis=2).T
-        rails[w0:w1] = (np.abs(raw.reshape(n_ch, k, fs * window_s)) >= RAIL).mean(axis=2).T
-        slow = baseline(x).reshape(n_ch, k, fs * window_s)
-        wander[w0:w1] = (slow.max(axis=2) - slow.min(axis=2)).T
+        raw = read(ch, a, b)
+        rr = raw.reshape(k, win)
+        # one exact integer running sum feeds both moving averages
+        c = running_sum(raw, np.int64)
+        x = raw * mv_per_lsb                              # float64, no float32 rounding
+        res = (x - box_from_sum(c, SMOOTH, mv_per_lsb)).reshape(k, win)
+        hf[w0:w1, ci] = res.std(axis=1)
+        steps[w0:w1, ci] = (np.abs(np.diff(rr.astype(np.int32), axis=1)) > step_lsb).mean(axis=1)
+        rails[w0:w1, ci] = ((rr >= RAIL) | (rr <= -RAIL)).mean(axis=1)
+        slow = box_from_sum(c, WANDER_SMOOTH, mv_per_lsb).reshape(k, win)
+        wander[w0:w1, ci] = slow.max(axis=1) - slow.min(axis=1)
+
+    # numpy releases the GIL inside cumsum / reductions, so channels run in parallel;
+    # each worker holds one channel-hour (~20 MB of temporaries)
+    with ThreadPoolExecutor(max_workers=min(n_ch, max(2, (__import__("os").cpu_count() or 2)))) as pool:
+        for w0 in range(0, n_win, per_chunk):
+            w1 = min(n_win, w0 + per_chunk)
+            a, b = w0 * win, w1 * win
+            list(pool.map(lambda ci: one(ci, INDEPENDENT[ci], a, b, w0, w1), range(n_ch)))
     return hf, steps, rails, wander
 
 

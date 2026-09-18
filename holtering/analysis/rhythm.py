@@ -196,14 +196,16 @@ def extract_episodes(t_ms: np.ndarray, labels: np.ndarray, audits: dict[int, Bea
 
     # errors of omission: an RR of 1.6-2.4x the surrounding rhythm in clean signal, with a
     # QRS-sized deflection near its middle, is a beat the detector skipped, not a pause
-    if missed_check is not None:
-        for k in range(8, len(rr) - 8):
-            if 2000 <= rr[k] or rr[k] < 900:
-                continue
-            around = np.r_[rr[k - 8:k], rr[k + 1:k + 9]]
-            med = float(np.median(around))
-            if not (1.6 * med <= rr[k] <= 2.4 * med):
-                continue
+    if missed_check is not None and len(rr) > 16:
+        # one vectorised pass: median of the 8 RR before and 8 after every interval
+        # (a per-beat np.median over 100k beats cost 0.85 s of every recompute)
+        from numpy.lib.stride_tricks import sliding_window_view
+        W = sliding_window_view(rr, 17)                                   # row j: rr[j:j+17], centre k = j + 8
+        med = np.median(np.concatenate([W[:, :8], W[:, 9:]], axis=1), axis=1)
+        ks = np.arange(8, len(rr) - 8)
+        x = rr[ks]
+        for k in ks[(x >= 900) & (x < 2000) & (x >= 1.6 * med) & (x <= 2.4 * med)]:
+            k = int(k)
             if noise_at(int(t_ms[k]), int(t_ms[k + 1])) >= 0.35:
                 continue
             hit, why = missed_check(int(t_ms[k]), int(t_ms[k + 1]))

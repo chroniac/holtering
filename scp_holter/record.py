@@ -82,6 +82,11 @@ class ScpHolter:
     def memmap(self) -> "np.memmap":
         return signal_mod.memmap(self.path, self.meta)
 
+    def read_lead(self, lead: int, a: int, b: int) -> "np.ndarray":
+        """Raw int16 samples [a, b) of one lead via a plain file read (see signal.read_lead);
+        the stored sign, not `invert` - callers scale with a signed mV/LSB."""
+        return signal_mod.read_lead(self.path, self.meta, lead, a, b)
+
     def read(self, start_s: float = 0.0, dur_s: float | None = None, mv: bool = True):
         """Samples as (n_leads, n) - float32 mV by default, else raw int16."""
         import numpy as np

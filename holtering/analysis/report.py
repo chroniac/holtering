@@ -41,9 +41,11 @@ class State:
         self.rec = ScpHolter(str(cfg.scp), invert=cfg.invert)
         if cfg.chest:
             self.rec.set_chest_labels(list(cfg.chest))
-        self.mm = self.rec.memmap()
+        self.mm = self.rec.memmap()                       # random access: ECG windows, per-beat audits
         self.fs = int(round(self.rec.fs))
-        self.mv = self.rec.meta.mv_per_lsb * (cfg.gain if cfg.gain is not None else 1.0)
+        # one signed scale for every consumer: --invert lives here (the memmap is the bytes as
+        # stored), --gain is the CardioSpy-printout calibration factor
+        self.mv = self.rec.sign * self.rec.meta.mv_per_lsb * (cfg.gain if cfg.gain is not None else 1.0)
         self.dev_t, self.dev_labels = load_annotations(cfg.qrs)      # what the device found, immutable
         self.t_ms, self.labels = self.dev_t, self.dev_labels           # merged view, rebuilt in recompute()
         self.total_ms = int(self.dev_t[-1])
@@ -86,13 +88,14 @@ class State:
     # ---- heavy, cached ------------------------------------------------------
     def _heavy(self) -> dict:
         t0 = time.time()
-        hf, steps, rails, wander = window_metrics(self.mm, self.fs, self.mv)
+        n = self.mm.shape[1]
+        hf, steps, rails, wander = window_metrics(self.rec.read_lead, n, self.fs, self.mv)
         noise10, sharp10, base = noise_score(hf, steps, rails, wander)
         wander_base = float(np.median(wander[:, INDEPENDENT.index(1)]))
         base_ii = float(base[INDEPENDENT.index(1)])
         auditor = BeatAuditor(self.mm, self.fs, self.mv, self.t_ms, self.labels, base_ii, sharp10, WINDOW_S)
         audits = auditor.audit_all()
-        w, valid = tpl.beat_windows(self.mm, self.fs, self.mv, self.t_ms)
+        w, valid = tpl.beat_windows(self.rec.read_lead, n, self.fs, self.mv, self.t_ms)
         assign, _ = tpl.cluster(w, valid)
         apply_family_evidence(audits, assign, self.labels)
         verdicts = {a.index: a.verdict for a in audits}
