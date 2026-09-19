@@ -1,7 +1,5 @@
 """Качество сигнала по окнам на восьми независимых каналах — docs/modules/analysis.md."""
 
-from __future__ import annotations
-
 import os
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor

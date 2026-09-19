@@ -1,8 +1,6 @@
 """Состояние записи: тяжёлый проход считается один раз и кэшируется, лёгкий (счётчики,
 эпизоды, поминутные ряды) пересчитывается на каждую ручную правку."""
 
-from __future__ import annotations
-
 import re
 import time
 from datetime import datetime, timedelta

@@ -1,7 +1,5 @@
 """Маршруты просмотра: сводка, окно ЭКГ, комплексы, эпизоды, шаблоны, ручные метки."""
 
-from __future__ import annotations
-
 from typing import Annotated
 
 import msgspec

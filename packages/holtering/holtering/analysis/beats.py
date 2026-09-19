@@ -1,7 +1,5 @@
 """Проверка меток V/S прибора по каждому комплексу: вердикты — docs/modules/analysis.md."""
 
-from __future__ import annotations
-
 import numpy as np
 from msgspec import Struct, field
 

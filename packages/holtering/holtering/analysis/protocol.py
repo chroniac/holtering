@@ -1,7 +1,5 @@
 """Бумажный протокол: всё, что нужно печатной форме, — docs/modules/analysis.md."""
 
-from __future__ import annotations
-
 import re
 from datetime import timedelta
 from typing import TYPE_CHECKING

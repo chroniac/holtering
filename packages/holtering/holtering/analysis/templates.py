@@ -1,7 +1,5 @@
 """Шаблоны морфологии: группировка комплексов по форме QRS — docs/modules/analysis.md."""
 
-from __future__ import annotations
-
 from collections.abc import Callable
 
 import numpy as np

@@ -1,7 +1,5 @@
 """ЧСС, вариабельность, паузы и эпизоды по проверенным меткам."""
 
-from __future__ import annotations
-
 from collections.abc import Callable
 
 import numpy as np
