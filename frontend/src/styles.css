@@ -2366,7 +2366,7 @@ body {
   fill: #b0506a;
 }
 
-/* margin boxes Chrome игнорирует; колонтитулы оставлены для серверной печати отчёта */
+/* margin boxes есть с Chrome 131; у врачей Chrome 109 — колонтитулы для серверной печати в PDF */
 @page {
   size: A4;
   margin: 14mm 14mm 13mm 14mm;
