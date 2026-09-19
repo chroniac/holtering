@@ -1,7 +1,7 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.5.14/schema.json",
   // .gitignore лежит в корне репозитория, не здесь, поэтому игнор задан списком, а не через vcs
-  "files": { "includes": ["**", "!dist", "!node_modules"] },
+  "files": { "includes": ["**", "!dist", "!node_modules", "!plugins"] },
   "formatter": {
     "enabled": true,
     "indentStyle": "space",
