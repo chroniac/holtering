@@ -305,7 +305,7 @@ class State:
         # Привязка к пациенту и дате съёма: переиспользованное имя файла (raw.scp следующего
         # пациента) не унаследует ни метки, ни дневник, ни заключение.
         pid = str(self.rec.patient.get("patient_id") or "na")
-        # An explicit cache_dir may not exist yet; next to the record it always does.
+        # Явный cache_dir может ещё не существовать; рядом с записью каталог есть всегда.
         cfg.cache_root.mkdir(parents=True, exist_ok=True)
         self.overrides_file = (
             cfg.cache_root / f"{cfg.scp.stem}.{pid}.{self.start:%Y%m%d}.overrides.json"
