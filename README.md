@@ -17,13 +17,13 @@ No proprietary SDK, no cloud: a Python service and a static frontend.
 
 | Strip | Disclosure |
 |---|---|
-| ![ECG strip with the beat audit and the episode list](docs/img/01-strip.png) | ![Full disclosure: one minute per row](docs/img/02-disclosure.png) |
+| ![ECG strip with the beat audit and the episode list](docs/img/01-strip.webp) | ![Full disclosure: one minute per row](docs/img/02-disclosure.webp) |
 | 12-lead strip with device labels, audit verdicts, the 24-hour overview (heart rate, ectopy, noise, estimated sleep) and the episode triage list. | Full disclosure, one minute per row, ectopic beats and episodes marked; a click opens the strip at that time. |
 
 | Templates | Protocol |
 |---|---|
-| ![Morphology families of QRS complexes](docs/img/03-templates.png) | ![Printable A4 protocol](docs/img/04-protocol.png) |
-| QRS morphology families; a whole family can be relabelled at once. Here the device's lone "V" turns out to be a double-counted sinus beat. | The printable A4 protocol: summary table, conclusion, hourly table and ECG strips; every paragraph is editable and the edits are stored with the record. |
+| ![Morphology families of QRS complexes](docs/img/03-templates.webp) | ![Printable A4 protocol](docs/img/04-protocol.webp) |
+| QRS morphology families; a whole family can be relabelled at once. One "V" family here is a double-counted sinus beat, rejected by the audit. | The printable A4 protocol: summary table, conclusion, hourly table and ECG strips; every paragraph is editable and the edits are stored with the record. |
 
 The screenshots are taken on a synthetic 24-hour record (`tests/synth.py`); the patient
 is fictional.
@@ -68,26 +68,28 @@ Settings can also come from `holtering.toml` or `HOLTERING_*` variables
 ## Performance
 
 Measured with `scripts/bench.py` on a synthetic 24-hour record of the same size and
-layout as a real export (`python tests/synth.py bench 86400`): 247 MiB, 99 198 beats,
-12 leads at 125 Hz. Machine: i9-14900KF, NVMe SSD, Windows 11, CPython 3.14.
-Medians of 5 runs.
+layout as a real export (`python tests/synth.py bench 86400`): 259 MB, 99 226 beats,
+12 leads at 125 Hz, ectopy spread over the day. Machine: i9-14900KF, NVMe SSD,
+Windows 11, CPython 3.14. Medians of 5 runs; the file had just been written, so it sits
+in the OS page cache — on a cold HDD the first start additionally pays one sequential
+read of the file.
 
 | Step | Result |
 |---|---|
-| cold start: parse + heavy pass + first recompute | 1.4 s |
-| warm start: parse + cached heavy pass + recompute | 161 ms |
-| `recompute()` after a label edit | 74 ms |
-| `GET /api/summary` | 1 ms, 2 KiB |
-| `GET /api/overview` (24 h minute HR + noise map) | 2 ms, 200 KiB |
-| `GET /api/beats?dur=10800` (3 h context strip) | 2 ms, 202 KiB |
-| `GET /api/ecg?dur=10` (12 leads) | 2 ms, 302 KiB |
-| `GET /api/ecg?dur=120` (12 leads) | 17 ms, 3.5 MiB |
-| `GET /api/raw?dur=3600` (one lead, int16) | 1 ms, 879 KiB |
-| `GET /api/templates` | 12 ms, 72 KiB |
-| `GET /api/report` (protocol text + strips) | 3 ms, 10 KiB |
-| `GET /api/export` (every beat) | 49 ms, 4.1 MiB |
-| `POST /api/annotations/{index}` (label edit + recompute) | 78 ms |
-| process working set after all of the above | 161 MiB |
+| first start: parse + heavy pass + recompute (file in page cache) | 1.5 s |
+| next start: parse + cached heavy pass + recompute | 170 ms |
+| `recompute()` after a label edit | 76 ms |
+| `GET /api/summary` | 1 ms, 2 kB |
+| `GET /api/overview` (24 h minute HR + noise map) | 2 ms, 204 kB |
+| `GET /api/beats?dur=10800` (3 h context strip) | 2 ms, 207 kB |
+| `GET /api/ecg?dur=10` (12 leads) | 3 ms, 310 kB |
+| `GET /api/ecg?dur=120` (12 leads) | 17 ms, 3.7 MB |
+| `GET /api/raw?dur=3600` (one lead, int16) | 1 ms, 900 kB |
+| `GET /api/templates` | 13 ms, 78 kB |
+| `GET /api/report` (protocol text + strips) | 4 ms, 11 kB |
+| `GET /api/export` (every beat) | 48 ms, 4.3 MB |
+| `POST /api/annotations/{index}` (label edit + recompute) | 139 ms |
+| process RSS after all of the above | 170 MB |
 
 The heavy pass on a real 259 MB / 23.99 h export took 1.2 s on the same machine. The
 signal is never loaded into memory: the parser is a zero-copy `numpy.memmap` over the
