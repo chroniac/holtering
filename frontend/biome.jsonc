@@ -34,5 +34,6 @@
       "complexity": { "noForEach": "off", "useLiteralKeys": "off", "noImportantStyles": "off" }
     }
   },
-  "assist": { "actions": { "source": { "organizeImports": "on" } } }
+  "assist": { "actions": { "source": { "organizeImports": "on" } } },
+  "plugins": ["./plugins/prefer-arrow.grit"]
 }

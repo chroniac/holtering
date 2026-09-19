@@ -1,5 +1,7 @@
-import { api, type DiaryEvent, type Summary } from "./api";
-import { clock, el } from "./util";
+import { api } from "../../api/client";
+import type { DiaryEvent, Summary } from "../../api/types";
+import { clockHM, secOf } from "../../lib/time";
+import { el } from "../../ui/dom";
 
 export interface DiaryView {
   root: HTMLElement;
@@ -12,7 +14,7 @@ export interface DiaryView {
  * Дневник симптомов: расшифровка начинается с него (ISHNE 2017 §4.1). Рядом с записью видно,
  * что делал ритм в ±2 минуты, поэтому связь «симптом — ритм» читается одной строкой.
  */
-export function createDiary(sum: Summary, onJump: (sec: number) => void, onChanged: () => void): DiaryView {
+export const createDiary = (sum: Summary, onJump: (sec: number) => void, onChanged: () => void): DiaryView => {
   const root = el("div", "side-tab diary");
   const startIso = sum.record.start;
   const start = new Date(startIso.replace(" ", "T"));
@@ -37,30 +39,7 @@ export function createDiary(sum: Summary, onJump: (sec: number) => void, onChang
   const list = el("div", "eps");
   root.append(form, hint, list);
 
-  function secOf(hhmm: string): number | null {
-    const [h, m] = hhmm.split(":").map(Number);
-    if (Number.isNaN(h)) return null;
-    const d = new Date(start);
-    d.setHours(h, m, 0, 0);
-    let sec = (d.getTime() - start.getTime()) / 1000;
-    if (sec < 0) sec += 86400; // время после полуночи относится к следующим суткам
-    return sec >= 0 && sec <= sum.record.duration_s ? sec : null;
-  }
-
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const sec = secOf(time.value);
-    if (sec === null) {
-      hint.textContent = "это время не попадает в запись";
-      return;
-    }
-    await api.addEvent(Math.round(sec * 1000), text.value);
-    text.value = "";
-    await reload();
-    onChanged();
-  });
-
-  async function reload(): Promise<DiaryEvent[]> {
+  const reload = async (): Promise<DiaryEvent[]> => {
     const evs = await api.events();
     list.innerHTML = "";
     if (!evs.length)
@@ -73,7 +52,7 @@ export function createDiary(sum: Summary, onJump: (sec: number) => void, onChang
       );
     for (const ev of evs) {
       const row = el("div", "ep-row diary-row");
-      row.append(el("div", "t", clock(startIso, ev.t_ms / 1000).slice(0, 5)));
+      row.append(el("div", "t", clockHM(startIso, ev.t_ms / 1000)));
       const body = el("div");
       body.append(el("div", "title", ev.text || "симптом"));
       const parts: string[] = [];
@@ -107,14 +86,27 @@ export function createDiary(sum: Summary, onJump: (sec: number) => void, onChang
       list.append(row);
     }
     return evs;
-  }
+  };
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const sec = secOf(start, time.value);
+    if (sec === null || sec > sum.record.duration_s) {
+      hint.textContent = "это время не попадает в запись";
+      return;
+    }
+    await api.addEvent(Math.round(sec * 1000), text.value);
+    text.value = "";
+    await reload();
+    onChanged();
+  });
 
   return {
     root,
     reload,
     prefill(sec) {
-      time.value = clock(startIso, sec).slice(0, 5);
+      time.value = clockHM(startIso, sec);
       text.focus();
     },
   };
-}
+};

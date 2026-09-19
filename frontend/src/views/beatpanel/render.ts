@@ -1,9 +1,9 @@
-import { api, type Beat, type ManualLabel, type Template } from "./api";
-import { clock, el, LABEL_RU, svg, VERDICT_RU, verdictClass } from "./util";
-
-let STRIP_LEADS: string[] = []; // трио отведений записи, задаётся в createBeatPanel
-const STRIP_DUR = 2.4; // секунд вокруг комплекса
-const SHAPE_MS = 96; // окно ± для наложения формы (как в templates.py)
+import { api } from "../../api/client";
+import type { Beat, EcgWindow, ManualLabel, Template } from "../../api/types";
+import { clock } from "../../lib/time";
+import { LABEL_RU, VERDICT_RU, verdictClass } from "../../lib/verdict";
+import { el, svg } from "../../ui/dom";
+import { beatShape, famParts, featRows, norm, SHAPE_MS, STRIP_DUR } from "./model";
 
 export interface BeatPanel {
   root: HTMLElement;
@@ -22,9 +22,81 @@ export interface BeatPanelHandlers {
   onStep: (dir: 1 | -1) => void;
 }
 
+// ui/segbar подписывает сегмент числом и создаёт свой контейнер; здесь нужен класс вердикта
+// в подсказке и заполнение готового famBar
+const fillSegbar = (bar: HTMLElement, parts: [string, number][]) => {
+  bar.innerHTML = "";
+  const tot = Math.max(
+    1,
+    parts.reduce((p, [, n]) => p + n, 0),
+  );
+  for (const [cls, n] of parts)
+    if (n) {
+      const sg = el("i", `seg ${cls}`);
+      sg.style.flex = String(n / tot);
+      sg.title = `${cls} ${n}`;
+      bar.append(sg);
+    }
+};
+
+const drawStrip = (host: SVGElement, win: EcgWindow, curIndex: number | undefined) => {
+  host.innerHTML = "";
+  const W = 320,
+    H = 150,
+    lane = H / win.leads.length,
+    pxS = W / STRIP_DUR;
+  for (let xs = 0; xs <= STRIP_DUR; xs += 0.2)
+    host.append(
+      svg("line", { x1: xs * pxS, x2: xs * pxS, y1: 0, y2: H, class: xs % 1 < 1e-6 ? "g-major" : "g-minor" }),
+    );
+  for (let ym = 0; ym <= H; ym += lane / 4)
+    host.append(svg("line", { x1: 0, x2: W, y1: ym, y2: ym, class: "g-minor" }));
+  const ptp = Math.max(0.3, ...win.data.map((r) => Math.max(...r) - Math.min(...r)));
+  const gain = (lane * 0.8) / ptp;
+  win.data.forEach((row, li) => {
+    const base = lane * li + lane / 2;
+    let d = "";
+    row.forEach((v, i) => {
+      d += (i ? "L" : "M") + ((i / win.fs) * pxS).toFixed(1) + " " + (base - v * gain).toFixed(1);
+    });
+    host.append(svg("path", { d, class: "bp-trace" }));
+    const t = svg("text", { x: 3, y: lane * li + 10, class: "bp-lead" });
+    t.textContent = win.leads[li];
+    host.append(t);
+  });
+  for (const m of win.beats) {
+    const x = (m.t_ms / 1000 - win.start) * pxS;
+    const me = m.index === curIndex;
+    host.append(svg("line", { x1: x, x2: x, y1: 0, y2: H, class: `bp-mark${me ? " me" : ""}` }));
+    const t = svg("text", { x: x + 2, y: H - 3, class: `bp-mark-lbl${me ? " me" : ""}` });
+    t.textContent = m.label;
+    host.append(t);
+  }
+};
+
+const drawShape = (host: SVGElement, beatII: number[], famWave: number[] | null, sinusWave: number[] | null) => {
+  host.innerHTML = "";
+  const W = 320,
+    H = 90;
+  const draw = (w: number[], cls: string) => {
+    const n = w.length;
+    let d = "";
+    w.forEach((v, i) => {
+      d += (i ? "L" : "M") + ((i / (n - 1)) * W).toFixed(1) + " " + (H / 2 - v * (H / 2) * 0.9).toFixed(1);
+    });
+    host.append(svg("path", { d, class: `bp-shape-${cls}` }));
+  };
+  host.append(svg("line", { x1: W / 2, x2: W / 2, y1: 0, y2: H, class: "g-major" }));
+  if (sinusWave) draw(norm(sinusWave), "sinus");
+  if (famWave) draw(norm(famWave), "fam");
+  draw(norm(beatII), "me");
+  const t = svg("text", { x: 4, y: H - 4, class: "bp-lead" });
+  t.textContent = `II · ±${SHAPE_MS} мс · нормировано`;
+  host.append(t);
+};
+
 /** Панель выбранного комплекса: отвечает «почему такой вердикт», не уводя врача с ленты. */
-export function createBeatPanel(h: BeatPanelHandlers, stripLeads: string[]): BeatPanel {
-  STRIP_LEADS = stripLeads;
+export const createBeatPanel = (h: BeatPanelHandlers, stripLeads: string[]): BeatPanel => {
   const root = el("div", "bp");
   const empty = el("div", "bp-empty");
   empty.innerHTML = `Выбрать комплекс: клик по метке или <kbd>Tab</kbd>.<br>Добавить пропущенный: клик по ленте.<br>Диапазон качества: <kbd>shift</kbd> + протянуть.`;
@@ -131,136 +203,51 @@ export function createBeatPanel(h: BeatPanelHandlers, stripLeads: string[]): Bea
     if (cur) h.onFamily(cur.template);
   });
 
-  async function loadTemplates() {
+  const loadTemplates = async () => {
     if (!templates) templates = await api.templates();
     return templates;
-  }
+  };
 
-  function drawStrip(sig: number[][], leads: string[], fs: number, start: number, marks: Beat[]) {
-    strip.innerHTML = "";
-    const W = 320,
-      H = 150,
-      lane = H / leads.length,
-      pxS = W / STRIP_DUR;
-    for (let xs = 0; xs <= STRIP_DUR; xs += 0.2)
-      strip.append(
-        svg("line", { x1: xs * pxS, x2: xs * pxS, y1: 0, y2: H, class: xs % 1 < 1e-6 ? "g-major" : "g-minor" }),
-      );
-    for (let ym = 0; ym <= H; ym += lane / 4)
-      strip.append(svg("line", { x1: 0, x2: W, y1: ym, y2: ym, class: "g-minor" }));
-    const ptp = Math.max(0.3, ...sig.map((r) => Math.max(...r) - Math.min(...r)));
-    const gain = (lane * 0.8) / ptp;
-    sig.forEach((row, li) => {
-      const base = lane * li + lane / 2;
-      let d = "";
-      row.forEach((v, i) => {
-        d += (i ? "L" : "M") + ((i / fs) * pxS).toFixed(1) + " " + (base - v * gain).toFixed(1);
-      });
-      strip.append(svg("path", { d, class: "bp-trace" }));
-      const t = svg("text", { x: 3, y: lane * li + 10, class: "bp-lead" });
-      t.textContent = leads[li];
-      strip.append(t);
-    });
-    for (const m of marks) {
-      const x = (m.t_ms / 1000 - start) * pxS;
-      const me = m.index === cur?.index;
-      strip.append(svg("line", { x1: x, x2: x, y1: 0, y2: H, class: `bp-mark${me ? " me" : ""}` }));
-      const t = svg("text", { x: x + 2, y: H - 3, class: `bp-mark-lbl${me ? " me" : ""}` });
-      t.textContent = m.label;
-      strip.append(t);
+  const fillFamily = async (famT: Template, b: Beat, startIso: string, id: number) => {
+    const dev = Object.entries(famT.labels)
+      .sort((x, y) => y[1] - x[1])
+      .map(([k, v]) => `${k} ${v}`)
+      .join(" · ");
+    famMeta.innerHTML = `<span>${famT.count.toLocaleString("ru")} компл. с такой формой</span><span>прибор: ${dev}</span>`;
+    fillSegbar(famBar, famParts(famT));
+    famBtn.textContent = "все с такой формой";
+    const peers = await api.templateBeats(famT.id, 0, 400);
+    if (id !== req) return;
+    famPeers.innerHTML = "";
+    const marked = peers.beats.filter((p) => p.index !== b.index && p.device_label !== "N").slice(0, 8);
+    for (const p of marked) {
+      const chip = el("button", `chip peer ${verdictClass(p.verdict)}`, clock(startIso, p.t_ms / 1000).slice(0, 8));
+      chip.title = `${p.label}: ${VERDICT_RU[p.verdict] ?? p.verdict}`;
+      chip.addEventListener("click", () => h.onJump(p.index));
+      famPeers.append(chip);
     }
-  }
+    if (!marked.length) famPeers.append(el("span", "muted", "других меток V/S в семействе нет"));
+  };
 
-  function drawShape(beatII: number[], famWave: number[] | null, sinusWave: number[] | null) {
-    shapeSvg.innerHTML = "";
-    const W = 320,
-      H = 90;
-    const norm = (w: number[]) => {
-      const med = [...w].sort((a, b) => a - b)[w.length >> 1];
-      const c = w.map((v) => v - med);
-      const m = Math.max(1e-6, ...c.map(Math.abs));
-      return c.map((v) => v / m);
-    };
-    const draw = (w: number[], cls: string) => {
-      const n = w.length;
-      let d = "";
-      w.forEach((v, i) => {
-        d += (i ? "L" : "M") + ((i / (n - 1)) * W).toFixed(1) + " " + (H / 2 - v * (H / 2) * 0.9).toFixed(1);
-      });
-      shapeSvg.append(svg("path", { d, class: `bp-shape-${cls}` }));
-    };
-    shapeSvg.append(svg("line", { x1: W / 2, x2: W / 2, y1: 0, y2: H, class: "g-major" }));
-    if (sinusWave) draw(norm(sinusWave), "sinus");
-    if (famWave) draw(norm(famWave), "fam");
-    draw(norm(beatII), "me");
-    const t = svg("text", { x: 4, y: H - 4, class: "bp-lead" });
-    t.textContent = `II · ±${SHAPE_MS} мс · нормировано`;
-    shapeSvg.append(t);
-  }
-
-  async function fill(b: Beat, startIso: string) {
+  const fill = async (b: Beat, startIso: string) => {
     const id = ++req;
     const t0 = b.t_ms / 1000 - STRIP_DUR / 2;
-    const [win, ts] = await Promise.all([api.ecg(Math.max(0, t0), STRIP_DUR, STRIP_LEADS), loadTemplates()]);
+    const [win, ts] = await Promise.all([api.ecg(Math.max(0, t0), STRIP_DUR, stripLeads), loadTemplates()]);
     if (id !== req) return;
-    drawStrip(win.data, win.leads, win.fs, win.start, win.beats);
-    const ii = win.data[0];
-    const c = Math.round((b.t_ms / 1000 - win.start) * win.fs),
-      half = Math.round((SHAPE_MS / 1000) * win.fs);
-    const beatII = ii.slice(Math.max(0, c - half), c + half + 1);
+    drawStrip(strip, win, cur?.index);
     const famT = ts.find((t) => t.id === b.template) ?? null;
     const sinusT = ts[0] ?? null; // самое большое семейство — синусовое
-    drawShape(beatII, famT ? famT.wave.leads[0] : null, sinusT ? sinusT.wave.leads[0] : null);
+    drawShape(shapeSvg, beatShape(win, b.t_ms), famT ? famT.wave.leads[0] : null, sinusT ? sinusT.wave.leads[0] : null);
     if (famT) {
-      const dev = Object.entries(famT.labels)
-        .sort((x, y) => y[1] - x[1])
-        .map(([k, v]) => `${k} ${v}`)
-        .join(" · ");
-      famMeta.innerHTML = `<span>${famT.count.toLocaleString("ru")} компл. с такой формой</span><span>прибор: ${dev}</span>`;
-      famBar.innerHTML = "";
-      const parts: [string, number][] = [
-        ["likely", famT.verdicts.likely ?? 0],
-        ["uncertain", famT.verdicts.uncertain ?? 0],
-        [
-          "rejected",
-          Object.entries(famT.verdicts)
-            .filter(([k]) => !["likely", "uncertain", "N"].includes(k))
-            .reduce((p, [, n]) => p + n, 0),
-        ],
-        ["n", famT.verdicts.N ?? 0],
-      ];
-      const tot = Math.max(
-        1,
-        parts.reduce((p, [, n]) => p + n, 0),
-      );
-      for (const [cls, n] of parts)
-        if (n) {
-          const sg = el("i", `seg ${cls}`);
-          sg.style.flex = String(n / tot);
-          sg.title = `${cls} ${n}`;
-          famBar.append(sg);
-        }
-      famBtn.textContent = "все с такой формой";
-      const peers = await api.templateBeats(famT.id, 0, 400);
-      if (id !== req) return;
-      famPeers.innerHTML = "";
-      const marked = peers.beats.filter((p) => p.index !== b.index && p.device_label !== "N").slice(0, 8);
-      for (const p of marked) {
-        const chip = el("button", `chip peer ${verdictClass(p.verdict)}`, clock(startIso, p.t_ms / 1000).slice(0, 8));
-        chip.title = `${p.label}: ${VERDICT_RU[p.verdict] ?? p.verdict}`;
-        chip.addEventListener("click", () => h.onJump(p.index));
-        famPeers.append(chip);
-      }
-      if (!marked.length) famPeers.append(el("span", "muted", "других меток V/S в семействе нет"));
+      await fillFamily(famT, b, startIso, id);
     } else {
       famMeta.textContent = "семейство не определено";
       famBar.innerHTML = "";
       famPeers.innerHTML = "";
       famBtn.textContent = "семейство";
     }
-  }
+  };
 
-  const fmt = (v: number | null, f: (x: number) => string) => (v === null ? "—" : f(v));
   return {
     root,
     showRange(r, startIso) {
@@ -293,16 +280,7 @@ export function createBeatPanel(h: BeatPanelHandlers, stripLeads: string[]): Bea
       sub.textContent = `${clock(startIso, b.t_ms / 1000)}${b.device_label ? ` · прибор ${b.device_label}` : ""}${b.manual && b.device_label ? ` → ${b.manual}` : ""}`;
       sub.title = `#${b.index}`;
       reasons.innerHTML = b.reasons.map((r) => `<li>${r}</li>`).join("");
-      feats.innerHTML = [
-        ["QRS", fmt(b.width_ms, (x) => `${x.toFixed(0)} мс`)],
-        ["синусовый QRS", fmt(b.width_ratio, (x) => (b.width_ms ? `${(b.width_ms / x).toFixed(0)} мс` : "—"))],
-        ["RR до", fmt(b.rr_pre, (x) => `${x} мс`)],
-        ["RR после", fmt(b.rr_post, (x) => `${x} мс`)],
-        ["ритм до неё", fmt(b.prematurity, (x) => (b.rr_pre ? `${(b.rr_pre / x).toFixed(0)} мс` : "—"))],
-        ["амплитуда", fmt(b.amp_ratio, (x) => `${(x * 100).toFixed(0)}% от N`)],
-        ["шум", fmt(b.noise_ratio, (x) => (x < 1.5 ? "нет" : x < 2.5 ? "умеренный" : "сильный"))],
-        ["форма как N", fmt(b.family_n_frac, (x) => (x > 0.9 ? "да" : x < 0.2 ? "нет" : "частично"))],
-      ]
+      feats.innerHTML = featRows(b)
         .map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`)
         .join("");
       for (const [k, btn] of Object.entries(labelBtns))
@@ -330,4 +308,4 @@ export function createBeatPanel(h: BeatPanelHandlers, stripLeads: string[]): Bea
         addTitle.textContent = clock(startIso, sec) + "." + String(Math.round((sec % 1) * 1000)).padStart(3, "0");
     },
   };
-}
+};

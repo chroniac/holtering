@@ -1,28 +1,19 @@
-import { api, type BeatsWindow, type RawLead } from "./api";
-import { clock, el } from "./util";
-
-const ROW_S = 60,
-  PAGE_ROWS = 30,
-  ROW_H = 34,
-  GUTTER = 52;
-const CLS_COLOR = ["", "#c8102e", "#b7791f", "#9a8a89", "#6f5fa8"];
-
-export interface DisclosureView {
-  root: HTMLElement;
-  show(atSec: number, lead: string, strip: { start: number; dur: number }): Promise<void>;
-  refresh(): Promise<void>;
-}
+import { api } from "../../api/client";
+import type { BeatsWindow, RawLead } from "../../api/types";
+import { clock, clockHM } from "../../lib/time";
+import { el } from "../../ui/dom";
+import { autoAmpMv, CLS_COLOR, type DisclosureView, GUTTER, PAGE_ROWS, ROW_H, ROW_S, rowMedian } from "./model";
 
 /**
  * Полное раскрытие: страница на 30 минут, минута — сжатая строка одного отведения.
  * Так сутки просматриваются за минуты, а клик открывает это место на ленте.
  */
-export function createDisclosure(
+export const createDisclosure = (
   startIso: string,
   total: number,
   leads: string[],
   onOpen: (sec: number) => void,
-): DisclosureView {
+): DisclosureView => {
   const root = el("div", "fd");
   const bar = el("div", "fd-bar");
   const title = el("span", "mono fd-title");
@@ -56,7 +47,7 @@ export function createDisclosure(
   let win: { start: number; dur: number } | null = null;
   leadSel.value = lead;
 
-  function draw() {
+  const draw = () => {
     if (!raw || !beats) return;
     const dpr = window.devicePixelRatio || 1;
     const W = Math.max(600, wrap.clientWidth - 2),
@@ -72,17 +63,8 @@ export function createDisclosure(
       fs = raw.fs,
       mv = raw.mvPerLsb;
     const spp = (ROW_S * fs) / plotW; // отсчётов на пиксель
-    // усиление: в авторежиме p99 амплитуды вписывается в высоту строки
-    let ampMv: number;
-    if (gainSel.value === "авто") {
-      const s = raw.samples;
-      let mx = 0;
-      for (let i = 0; i < s.length; i += 7) {
-        const v = Math.abs(s[i]);
-        if (v > mx) mx = v;
-      }
-      ampMv = Math.max(0.5, mx * mv * 0.6);
-    } else ampMv = ROW_H / 2 / Number(gainSel.value) / 2.6; // грубый перевод px в мм
+    // усиление: в авторежиме p99 амплитуды вписывается в высоту строки, иначе грубый перевод px в мм
+    const ampMv = gainSel.value === "авто" ? autoAmpMv(raw.samples, mv) : ROW_H / 2 / Number(gainSel.value) / 2.6;
     const yScale = (ROW_H * 0.46) / ampMv;
 
     for (let r = 0; r < PAGE_ROWS; r++) {
@@ -107,15 +89,12 @@ export function createDisclosure(
       // подпись времени
       ctx.fillStyle = "#5c4d4c";
       ctx.font = "10px JetBrains Mono, monospace";
-      ctx.fillText(clock(startIso, rowStart).slice(0, 5), 4, base + 4);
+      ctx.fillText(clockHM(startIso, rowStart), 4, base + 4);
       // сигнал: базовая линия — медиана строки, по столбцу min/max
       const s0 = Math.round((rowStart - raw.start) * fs),
         s1 = Math.min(raw.samples.length, s0 + ROW_S * fs);
       if (s0 >= raw.samples.length) continue;
-      const samp: number[] = [];
-      for (let i = s0; i < s1; i += 25) samp.push(raw.samples[i]);
-      samp.sort((a, b) => a - b);
-      const med = samp[samp.length >> 1] ?? 0;
+      const med = rowMedian(raw.samples, s0, s1);
       ctx.strokeStyle = "#16100f";
       ctx.lineWidth = 1;
       ctx.beginPath();
@@ -167,14 +146,14 @@ export function createDisclosure(
       }
     }
     const end = Math.min(total, pageStart + PAGE_ROWS * ROW_S);
-    title.textContent = `${clock(startIso, pageStart).slice(0, 5)}–${clock(startIso, end).slice(0, 5)} · ${lead}`;
-  }
+    title.textContent = `${clockHM(startIso, pageStart)}–${clockHM(startIso, end)} · ${lead}`;
+  };
 
-  async function load() {
+  const load = async () => {
     const dur = Math.min(PAGE_ROWS * ROW_S, total - pageStart);
     [raw, beats] = await Promise.all([api.raw(pageStart, dur, lead), api.beats(pageStart, dur)]);
     draw();
-  }
+  };
 
   prev.addEventListener("click", () => {
     pageStart = Math.max(0, pageStart - PAGE_ROWS * ROW_S);
@@ -222,4 +201,4 @@ export function createDisclosure(
       if (raw) await load();
     },
   };
-}
+};

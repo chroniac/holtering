@@ -1,0 +1,8 @@
+language js
+
+// Function declarations are hoisted and hide the order of definition; the codebase uses
+// arrow functions assigned to `const` everywhere (AGENTS.md → Code). The node pattern
+// covers annotated, generic, async and nested declarations, which snippet patterns miss.
+function_declaration() as $fn where {
+  register_diagnostic(span=$fn, message="Use an arrow function: `const name = (…) => { … }`")
+}

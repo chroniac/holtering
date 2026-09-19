@@ -1,4 +1,4 @@
-import { el, svg } from "./util";
+import { el, svg } from "./dom";
 
 export interface DumbbellRow {
   label: string;
@@ -11,7 +11,7 @@ export interface DumbbellRow {
  * «До → после» на одной оси: пустая точка — прибор, закрашенная — аудит, разница справа.
  * Строки, где аудит сдвинул счёт в другую сторону или не сдвинул вовсе, идут акцентом.
  */
-export function dumbbell(rows: DumbbellRow[], title: [string, string]): HTMLElement {
+export const dumbbell = (rows: DumbbellRow[], title: [string, string]): HTMLElement => {
   const box = el("div", "dumb");
   const head = el("div", "dumb-head mono");
   head.innerHTML = `<span>${title[0]}</span><span>${title[1]}</span>`;
@@ -50,4 +50,4 @@ export function dumbbell(rows: DumbbellRow[], title: [string, string]): HTMLElem
   });
   box.append(sv);
   return box;
-}
+};

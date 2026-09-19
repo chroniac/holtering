@@ -11,15 +11,15 @@ const TODO = /^\s*(\/\/|\/\*|\*|<!--)\s*(TODO|FIXME|XXX)\b(?!.*(Q-\d+|#\d+|https
 const EXT = /\.(js|ts|css|html)$/;
 const SKIP_DIRS: Record<string, true> = { node_modules: true, dist: true, ".git": true };
 
-async function* walk(dir: string): AsyncGenerator<string> {
+const walk = async function* (dir: string): AsyncGenerator<string> {
   for (const e of await readdir(dir, { withFileTypes: true })) {
     if (e.isDirectory()) {
       if (!SKIP_DIRS[e.name]) yield* walk(join(dir, e.name));
     } else if (EXT.test(e.name)) yield join(dir, e.name);
   }
-}
+};
 
-function scan(path: string, text: string): string[] {
+const scan = (path: string, text: string): string[] => {
   const errors: string[] = [];
   let runStart = 0;
   let run = 0;
@@ -39,7 +39,7 @@ function scan(path: string, text: string): string[] {
   });
   flush();
   return errors;
-}
+};
 
 const root = join(import.meta.dir, "..");
 const args = Bun.argv.slice(2);

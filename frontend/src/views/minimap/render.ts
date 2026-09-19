@@ -1,35 +1,33 @@
-import { api, type BeatsWindow } from "./api";
-import { clampRange, cursorFor, type DragMode, hitRange, type Range, wheelIntent, zoomAround } from "./nav";
-import { clock, el } from "./util";
-
-const H = 74,
-  RR_TOP = 4,
-  RR_H = 40,
-  TICK_Y = 50,
-  TICK_H = 14,
-  AXIS_Y = 66;
-const HANDLE = 6;
-export const STRIP_MIN = 2,
-  STRIP_MAX = 120;
-const CLS_COLOR = ["#d9c4c7", "#c8102e", "#b7791f", "#9a8a89", "#6f5fa8"]; // N, likely, uncertain, rejected, manual
-
-export interface MinimapView {
-  root: HTMLElement;
-  /** Показать `ctx` (догрузив комплексы при смене) и нарисовать в нём окно ленты. */
-  set(ctx: Range, strip: Range): Promise<void>;
-  refresh(): Promise<void>;
-  setEvents(secs: number[]): void;
-}
+import { api } from "../../api/client";
+import type { BeatsWindow } from "../../api/types";
+import { clampRange, cursorFor, type DragMode, hitRange, type Range, wheelIntent, zoomAround } from "../../lib/nav";
+import { clock } from "../../lib/time";
+import { CLS_COLOR } from "../../lib/verdict";
+import { el } from "../../ui/dom";
+import {
+  AXIS_Y,
+  ctxLabel,
+  dotSize,
+  H,
+  HANDLE,
+  type MinimapView,
+  rrY,
+  STRIP_MAX,
+  STRIP_MIN,
+  TICK_H,
+  TICK_Y,
+  tickStep,
+} from "./model";
 
 /**
  * Средний ярус навигатора: выбранный на суточном обзоре контекст с тахограммой R-R,
- * штрихами комплексов, заливкой помех и рамкой окна ленты. Жесты общие (nav.ts).
+ * штрихами комплексов, заливкой помех и рамкой окна ленты. Жесты общие (lib/nav.ts).
  */
-export function createMinimap(
+export const createMinimap = (
   startIso: string,
   total: number,
   onStrip: (r: Range, live: boolean) => void,
-): MinimapView {
+): MinimapView => {
   const root = el("div", "mini");
   const cv = el("canvas", "mini-cv");
   const lbl = el("div", "mini-lbl");
@@ -45,7 +43,7 @@ export function createMinimap(
   const x = (sec: number) => ((sec - ctx.start) / ctx.dur) * W;
   const sec = (px: number) => ctx.start + (px / W) * ctx.dur;
 
-  function draw() {
+  const draw = () => {
     const dpr = window.devicePixelRatio || 1;
     W = Math.max(400, root.clientWidth);
     cv.width = Math.round(W * dpr);
@@ -65,7 +63,7 @@ export function createMinimap(
     c2.lineWidth = 1;
     c2.font = "9px JetBrains Mono, monospace";
     c2.fillStyle = "#9a8a89";
-    const stepS = ctx.dur <= 180 ? 30 : ctx.dur <= 900 ? 60 : ctx.dur <= 3600 ? 300 : 900;
+    const stepS = tickStep(ctx.dur);
     for (let t = Math.ceil(ctx.start / stepS) * stepS; t < ctx.start + ctx.dur; t += stepS) {
       const px = Math.round(x(t)) + 0.5;
       c2.beginPath();
@@ -74,7 +72,6 @@ export function createMinimap(
       c2.stroke();
       c2.fillText(clock(startIso, t).slice(0, stepS < 60 ? 8 : 5), px + 3, H - 2);
     }
-    const rrY = (rr: number) => RR_TOP + RR_H - Math.max(0, Math.min(1, (rr - 300) / 1300)) * RR_H;
     c2.strokeStyle = "#f3c9c9";
     c2.beginPath();
     for (const rr of [600, 1000]) {
@@ -87,7 +84,7 @@ export function createMinimap(
     c2.fillText("1000", 2, rrY(1000) - 2);
     c2.fillText("600 мс", 2, rrY(600) - 2);
     const n = data.t_ms.length;
-    const dot = Math.max(1, Math.min(2.2, (W / Math.max(1, n)) * 1.2));
+    const dot = dotSize(W, n);
     for (let i = 0; i < n; i++) {
       const px = x(data.t_ms[i] / 1000);
       if (px < 0 || px > W) continue;
@@ -136,16 +133,14 @@ export function createMinimap(
     c2.fillStyle = "#c8102e";
     c2.fillRect(a - HANDLE / 2, AXIS_Y / 2 - 9, HANDLE, 18);
     c2.fillRect(b - HANDLE / 2, AXIS_Y / 2 - 9, HANDLE, 18);
-    const ctxTxt =
-      ctx.dur >= 3600 ? `${(ctx.dur / 3600).toFixed(ctx.dur % 3600 ? 1 : 0)} ч` : `${Math.round(ctx.dur / 60)} мин`;
-    lbl.textContent = `${ctxTxt} · окно ${strip.dur % 1 ? strip.dur.toFixed(1) : strip.dur} с · точки: R-R`;
-  }
+    lbl.textContent = ctxLabel(ctx, strip);
+  };
 
-  async function ensure() {
+  const ensure = async () => {
     if (loaded && loaded.start === ctx.start && loaded.dur === ctx.dur) return;
     loaded = { ...ctx };
     data = await api.beats(ctx.start, ctx.dur);
-  }
+  };
 
   let drag: { mode: DragMode; px: number; r: Range } | null = null;
   const pxOf = (e: MouseEvent) => e.clientX - cv.getBoundingClientRect().left;
@@ -217,4 +212,4 @@ export function createMinimap(
       draw();
     },
   };
-}
+};

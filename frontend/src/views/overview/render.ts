@@ -1,41 +1,44 @@
-import type { Episode, Overview, Summary } from "./api";
-import { clampRange, cursorFor, type DragMode, hitRange, type Range, wheelIntent, zoomAround } from "./nav";
-import { clock, el, svg } from "./util";
+import type { Episode, Overview, Summary } from "../../api/types";
+import { clampRange, cursorFor, type DragMode, hitRange, type Range, wheelIntent, zoomAround } from "../../lib/nav";
+import { clock, clockHM } from "../../lib/time";
+import { el, svg } from "../../ui/dom";
+import {
+  AX_H,
+  BIN_MIN,
+  binSums,
+  CTX_MAX,
+  CTX_MIN,
+  DOT_ROWS,
+  ECT_H,
+  firstTickSec,
+  HANDLE_W,
+  HR_MIN,
+  hourlySums,
+  hrBounds,
+  hrTicks,
+  NOISE_H,
+  nightMinutes,
+  noiseRuns,
+  type OverviewView,
+  PAD_L,
+  PAD_R,
+  PAD_T,
+} from "./model";
 
-const PAD_L = 34,
-  PAD_R = 12,
-  PAD_T = 8;
-const ECT_H = 30,
-  NOISE_H = 8,
-  AX_H = 18,
-  HR_MIN = 60;
 let H = 168,
   HR_H = 78; // пересчитывается от контейнера на каждой отрисовке
-const BIN_MIN = 10,
-  HANDLE_W = 6;
-export const CTX_MIN = 60,
-  CTX_MAX = 3 * 3600;
-
-export interface OverviewView {
-  root: HTMLElement;
-  /** Нарисовать контекст (то, что показывает миникарта) и положение ленты внутри него. */
-  setContext(ctx: Range, strip: Range): void;
-  setActiveEpisode(id: number | null): void;
-  update(ov: Overview, episodes: Episode[]): void;
-  setEvents(secs: number[]): void;
-}
 
 /**
  * Суточный обзор: выделение здесь — контекст (1 мин – 3 ч), который разворачивает миникарта.
  * Само окно ленты выделять нечем (10 с — это 0,2 px на суточной оси), оно показано волоском.
  */
-export function renderOverview(
+export const renderOverview = (
   sum: Summary,
   ov0: Overview,
   episodes0: Episode[],
   onContext: (ctx: Range, live: boolean) => void,
   onEpisode: (ep: Episode) => void,
-): OverviewView {
+): OverviewView => {
   let ov = ov0,
     episodes = episodes0;
   const root = el("div", "ov card");
@@ -46,7 +49,7 @@ export function renderOverview(
     el(
       "div",
       "card-sub",
-      `${clock(sum.record.start, 0).slice(0, 5)} → ${clock(sum.record.start, sum.record.duration_s).slice(0, 5)} · ЧСС, экстрасистолы, помехи, сон`,
+      `${clockHM(sum.record.start, 0)} → ${clockHM(sum.record.start, sum.record.duration_s)} · ЧСС, экстрасистолы, помехи, сон`,
     ),
   );
   head.append(el("div", "card-icon", "◔"), ttl);
@@ -83,7 +86,32 @@ export function renderOverview(
   const x = (sec: number) => PAD_L + (sec / total) * (W - PAD_L - PAD_R);
   const sec = (px: number) => ((px - PAD_L) / (W - PAD_L - PAD_R)) * total;
 
-  function draw() {
+  const drawEvents = () => {
+    if (!evLayer) return;
+    evLayer.innerHTML = "";
+    for (const sec of events) {
+      const px = x(sec);
+      evLayer.append(svg("path", { class: "evmark", d: `M${px} ${PAD_T - 6} l4 6 l-4 6 l-4 -6 z` }));
+      evLayer.append(
+        svg("line", { class: "evline", x1: px, x2: px, y1: PAD_T, y2: PAD_T + HR_H + ECT_H + NOISE_H + 6 }),
+      );
+    }
+  };
+
+  const place = () => {
+    if (!box || !hL || !hR || !hair) return;
+    const a = x(ctx.start),
+      b = x(ctx.start + ctx.dur);
+    box.setAttribute("x", String(a));
+    box.setAttribute("width", String(Math.max(2, b - a)));
+    hL.setAttribute("x", String(a - HANDLE_W / 2));
+    hR.setAttribute("x", String(b - HANDLE_W / 2));
+    const wide = b - a >= HANDLE_W * 3;
+    hL.style.display = hR.style.display = wide ? "" : "none";
+    hair.setAttribute("x", String(x(strip.start + strip.dur / 2)));
+  };
+
+  const draw = () => {
     W = width();
     H = height();
     HR_H = Math.max(HR_MIN, H - PAD_T - ECT_H - NOISE_H - AX_H - 14); // панели ЧСС достаётся вся остальная высота
@@ -100,30 +128,25 @@ export function renderOverview(
       `<pattern id="hatch" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="2" height="5" fill="#c8102e" opacity="0.7"/></pattern>`;
     s.append(defs, svg("rect", { x: PAD_L, y: PAD_T, width: plotW, height: HR_H + ECT_H + 6, fill: "url(#dotgrid)" }));
 
-    for (let m = 0; m < ov.minute_hr.length; m++) {
-      const d = new Date(start.getTime() + m * 60000);
-      if (d.getHours() < 6)
-        s.append(
-          svg("rect", {
-            class: "night",
-            x: x(m * 60),
-            y: PAD_T,
-            width: Math.max(1, plotW / (total / 60)),
-            height: bandH,
-          }),
-        );
-    }
+    for (const m of nightMinutes(start, ov.minute_hr.length))
+      s.append(
+        svg("rect", {
+          class: "night",
+          x: x(m * 60),
+          y: PAD_T,
+          width: Math.max(1, plotW / (total / 60)),
+          height: bandH,
+        }),
+      );
     for (const [a, b] of ov.sleep) {
       s.append(svg("rect", { class: "sleep", x: x(a * 60), y: PAD_T, width: x(b * 60) - x(a * 60), height: bandH }));
       const t = svg("text", { class: "sleep-lbl", x: x(a * 60) + 4, y: PAD_T + 11 });
-      t.textContent = `сон ${clock(sum.record.start, a * 60).slice(0, 5)}–${clock(sum.record.start, b * 60).slice(0, 5)}`;
+      t.textContent = `сон ${clockHM(sum.record.start, a * 60)}–${clockHM(sum.record.start, b * 60)}`;
       s.append(t);
     }
 
     const hrs = ov.minute_hr.map((v) => v ?? NaN);
-    const finite = hrs.filter((v) => !Number.isNaN(v));
-    const lo = Math.max(30, Math.floor(Math.min(...finite) / 10) * 10 - 10);
-    const hi = Math.ceil(Math.max(...finite) / 10) * 10 + 10;
+    const { lo, hi } = hrBounds(hrs);
     const y = (v: number) => PAD_T + HR_H - ((v - lo) / (hi - lo)) * HR_H;
     let d = "",
       area = "",
@@ -154,7 +177,7 @@ export function renderOverview(
       s.append(t);
     }
     const ax = svg("g", { class: "axis" });
-    for (const v of [lo + 10, Math.round((lo + hi) / 20) * 10, hi - 10]) {
+    for (const v of hrTicks(lo, hi)) {
       ax.append(svg("line", { x1: PAD_L, x2: W - PAD_R, y1: y(v), y2: y(v) }));
       const t = svg("text", { x: PAD_L - 4, y: y(v) + 3, "text-anchor": "end" });
       t.textContent = String(v);
@@ -164,18 +187,15 @@ export function renderOverview(
 
     // эктопия за 10 мин точками: точка = `unit` комплексов, аудит закрашен, прибор — контуром
     const nb = Math.ceil(ov.minute_v.length / BIN_MIN);
-    const agg = (arr: number[]) =>
-      Array.from({ length: nb }, (_, b) => arr.slice(b * BIN_MIN, (b + 1) * BIN_MIN).reduce((p, c) => p + c, 0));
-    const vDev = agg(ov.minute_v_device),
-      vAud = agg(ov.minute_v),
-      sAud = agg(ov.minute_s);
+    const vDev = binSums(ov.minute_v_device, BIN_MIN, nb),
+      vAud = binSums(ov.minute_v, BIN_MIN, nb),
+      sAud = binSums(ov.minute_s, BIN_MIN, nb);
     const mx = Math.max(1, ...vDev, ...sAud);
-    const rows = 6,
-      unit = Math.max(1, Math.ceil(mx / rows));
+    const unit = Math.max(1, Math.ceil(mx / DOT_ROWS));
     const y0 = PAD_T + HR_H + 6,
       bw = plotW / nb,
       dr = Math.min(2.2, bw * 0.22),
-      dy = ECT_H / rows;
+      dy = ECT_H / DOT_ROWS;
     for (let b = 0; b < nb; b++) {
       const bx = x(b * BIN_MIN * 60);
       const g = svg("g", { class: "bin" });
@@ -185,15 +205,15 @@ export function renderOverview(
         nS = Math.ceil(sAud[b] / unit);
       const cxV = bx + bw * 0.33,
         cxS = bx + bw * 0.7;
-      for (let i = 0; i < Math.min(rows, nDev); i++) {
+      for (let i = 0; i < Math.min(DOT_ROWS, nDev); i++) {
         const cy = y0 + ECT_H - dy * (i + 0.5);
         g.append(svg("circle", { class: i < nAud ? "dot-v" : "dot-vdev", cx: cxV, cy, r: dr }));
       }
-      for (let i = 0; i < Math.min(rows, nS); i++)
+      for (let i = 0; i < Math.min(DOT_ROWS, nS); i++)
         g.append(svg("circle", { class: "dot-s", cx: cxS, cy: y0 + ECT_H - dy * (i + 0.5), r: dr * 0.8 }));
       g.addEventListener("mousemove", (e) => {
         tip.innerHTML =
-          `<div class="t">${clock(sum.record.start, b * BIN_MIN * 60).slice(0, 5)}–${clock(sum.record.start, (b + 1) * BIN_MIN * 60).slice(0, 5)}</div>` +
+          `<div class="t">${clockHM(sum.record.start, b * BIN_MIN * 60)}–${clockHM(sum.record.start, (b + 1) * BIN_MIN * 60)}</div>` +
           `<div class="v">ЖЭС ${vAud[b]} <span class="dim">прибор ${vDev[b]}</span> · НЖЭС ${sAud[b]}</div>`;
         tip.style.left = `${e.clientX + 12}px`;
         tip.style.top = `${e.clientY + 12}px`;
@@ -206,9 +226,7 @@ export function renderOverview(
     lbl.textContent = `● = ${unit}`;
     s.append(lbl);
     // час пика эктопии по аудиту: пунктирная рамка с подписью
-    const hourly = Array.from({ length: Math.ceil(ov.minute_v.length / 60) }, (_, hh) =>
-      ov.minute_v.slice(hh * 60, (hh + 1) * 60).reduce((p, c) => p + c, 0),
-    );
+    const hourly = hourlySums(ov.minute_v);
     const peakH = hourly.indexOf(Math.max(...hourly));
     if (hourly[peakH] > 0) {
       const bx0 = x(peakH * 3600),
@@ -221,37 +239,30 @@ export function renderOverview(
 
     const yN = y0 + ECT_H + 4,
       w10 = ov.noise_window_s;
-    let run: number | null = null;
-    ov.noise10.forEach((v, i) => {
-      const bad = v >= 0.35;
-      if (bad && run === null) run = i;
-      if ((!bad || i === ov.noise10.length - 1) && run !== null) {
-        const a = x(run * w10),
-          b = x((i + (bad ? 1 : 0)) * w10);
-        s.append(
-          svg("rect", {
-            class: "noise",
-            x: a,
-            y: yN,
-            width: Math.max(1.5, b - a),
-            height: NOISE_H,
-            fill: "url(#hatch)",
-          }),
-        );
-        run = null;
-      }
-    });
+    for (const [r0, r1] of noiseRuns(ov.noise10)) {
+      const a = x(r0 * w10),
+        b = x(r1 * w10);
+      s.append(
+        svg("rect", {
+          class: "noise",
+          x: a,
+          y: yN,
+          width: Math.max(1.5, b - a),
+          height: NOISE_H,
+          fill: "url(#hatch)",
+        }),
+      );
+    }
     const nl = svg("text", { class: "row-lbl", x: PAD_L - 4, y: yN + NOISE_H - 1, "text-anchor": "end" });
     nl.textContent = "шум";
     s.append(nl);
 
     const tax = svg("g", { class: "axis" });
     const yT = yN + NOISE_H + AX_H - 4;
-    const firstTick = (2 - (start.getHours() % 2)) * 3600 - start.getMinutes() * 60 - start.getSeconds();
-    for (let t = firstTick; t < total; t += 7200) {
+    for (let t = firstTickSec(start); t < total; t += 7200) {
       tax.append(svg("line", { x1: x(t), x2: x(t), y1: PAD_T, y2: yN + NOISE_H + 2 }));
       const tt = svg("text", { x: x(t), y: yT, "text-anchor": "middle" });
-      tt.textContent = clock(sum.record.start, t).slice(0, 5);
+      tt.textContent = clockHM(sum.record.start, t);
       tax.append(tt);
     }
     s.append(tax);
@@ -283,34 +294,9 @@ export function renderOverview(
       epNodes[ep.id] = g;
     }
     place();
-  }
+  };
 
-  function drawEvents() {
-    if (!evLayer) return;
-    evLayer.innerHTML = "";
-    for (const sec of events) {
-      const px = x(sec);
-      evLayer.append(svg("path", { class: "evmark", d: `M${px} ${PAD_T - 6} l4 6 l-4 6 l-4 -6 z` }));
-      evLayer.append(
-        svg("line", { class: "evline", x1: px, x2: px, y1: PAD_T, y2: PAD_T + HR_H + ECT_H + NOISE_H + 6 }),
-      );
-    }
-  }
-
-  function place() {
-    if (!box || !hL || !hR || !hair) return;
-    const a = x(ctx.start),
-      b = x(ctx.start + ctx.dur);
-    box.setAttribute("x", String(a));
-    box.setAttribute("width", String(Math.max(2, b - a)));
-    hL.setAttribute("x", String(a - HANDLE_W / 2));
-    hR.setAttribute("x", String(b - HANDLE_W / 2));
-    const wide = b - a >= HANDLE_W * 3;
-    hL.style.display = hR.style.display = wide ? "" : "none";
-    hair.setAttribute("x", String(x(strip.start + strip.dur / 2)));
-  }
-
-  // взаимодействия (см. nav.ts)
+  // взаимодействия (см. lib/nav.ts)
   let drag: { mode: DragMode; px: number; r: Range } | null = null;
   const pxOf = (e: MouseEvent) => ((e.clientX - s.getBoundingClientRect().left) / s.getBoundingClientRect().width) * W;
   const hit = (p: number) => hitRange(p, x(ctx.start), x(ctx.start + ctx.dur), HANDLE_W, "new");
@@ -395,4 +381,4 @@ export function renderOverview(
       drawEvents();
     },
   };
-}
+};

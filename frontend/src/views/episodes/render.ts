@@ -1,6 +1,7 @@
-import type { Episode, Summary } from "./api";
-import { dumbbell } from "./dumbbell";
-import { clock, el } from "./util";
+import type { Episode, Summary } from "../../api/types";
+import { clockHM } from "../../lib/time";
+import { el } from "../../ui/dom";
+import { dumbbell } from "../../ui/dumbbell";
 
 export interface EpisodesView {
   root: HTMLElement;
@@ -9,7 +10,7 @@ export interface EpisodesView {
 
 const VERDICT_LABEL: Record<string, string> = { artifact: "артефакт", review: "проверить", likely: "вероятно" };
 
-export function renderEpisodes(sum: Summary, episodes: Episode[], onPick: (ep: Episode) => void): EpisodesView {
+export const renderEpisodes = (sum: Summary, episodes: Episode[], onPick: (ep: Episode) => void): EpisodesView => {
   const root = el("div", "side-tab");
   // пять находок расшифровки, перед списком эпизодов
   const crit = el("div", "criteria");
@@ -42,12 +43,12 @@ export function renderEpisodes(sum: Summary, episodes: Episode[], onPick: (ep: E
   root.append(box);
   const rows: Record<number, HTMLElement> = {};
 
-  function list() {
+  const list = () => {
     box.innerHTML = "";
     for (const ep of episodes) {
       if (!on[ep.verdict]) continue;
       const row = el("div", "ep-row");
-      row.append(el("div", "t", clock(sum.record.start, ep.t_ms / 1000).slice(0, 5)));
+      row.append(el("div", "t", clockHM(sum.record.start, ep.t_ms / 1000)));
       const body = el("div");
       const title = el("div", "title", ep.title);
       const v = el("span", `v ${ep.verdict}`, VERDICT_LABEL[ep.verdict]);
@@ -59,7 +60,7 @@ export function renderEpisodes(sum: Summary, episodes: Episode[], onPick: (ep: E
       box.append(row);
       rows[ep.id] = row;
     }
-  }
+  };
   list();
 
   const foot = el("div", "side-foot");
@@ -102,4 +103,4 @@ export function renderEpisodes(sum: Summary, episodes: Episode[], onPick: (ep: E
       }
     },
   };
-}
+};
