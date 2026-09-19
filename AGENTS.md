@@ -48,6 +48,17 @@ made; propose it as an ADR, not as code.
 - A docstring is one line and only where the name is not enough. Knowledge
   about formats and methodology lives in `docs/modules/*.md`.
 - Tests cover behaviour and boundaries, not wiring.
+- Frontend (`frontend/src`) is layered: `api/` (wire types + client), `lib/`
+  (pure, DOM-free logic), `ui/` (shared DOM widgets), `views/<name>/`
+  (`model.ts` = view-specific types and pure logic, `render.ts` = DOM/SVG/canvas
+  and events, `index.ts` = the public entry), `app/` (state, actions, boot).
+  A view imports `api`, `lib`, `ui` and its own `model`; never another view's
+  internals. Only `app/boot.ts` wires views together.
+- Arrow functions only, `const name = (…) => …`; no `function` declarations
+  (Biome plugin `frontend/plugins/prefer-arrow.grit`). Arrow consts are not
+  hoisted: define before the first reference. Type-only imports use
+  `import type` (`verbatimModuleSyntax`). Pure logic in `lib/` and `model.ts`
+  is unit-tested with `bun test` where a plausible bug exists; DOM is not.
 
 ## Commits and documentation
 

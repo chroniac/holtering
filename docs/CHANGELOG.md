@@ -45,7 +45,15 @@ versions are semver by Conventional Commits. Every change adds a line under
   instead of `print`.
 - Parser: knowledge of the format and the montage lives in `docs/modules/scp-holter.md`, docstrings are
   single-line, types pass `ty`; behaviour and exports are byte for byte the same.
-- Frontend: Bun + Biome, `scripts/check-comments.ts`; build targets Chrome 109 / Firefox ESR 115
+- Frontend restructured into layers: `api/` (types + client), `lib/` (pure logic), `ui/`
+  (shared widgets), `views/<name>/{model,render,index}.ts`, `app/` (state, actions, keyboard,
+  boot) instead of 14 flat files; the 712-line `main.ts` is gone. Every `function` declaration
+  became an arrow const, enforced by the Biome plugin `plugins/prefer-arrow.grit`;
+  `verbatimModuleSyntax` in tsconfig. 61 `bun test` cases for the pure parts (time, nav,
+  leads, overview binning, ecg auto-gain, templates scoring, report strips, app state
+  transitions). DOM output of every view and the relabel flow are byte-identical to the
+  previous build on the synthetic record.
+- Frontend: Bun + Biome, `scripts/check-comments.ts`; the build targets Chrome 109 / Firefox ESR 115
   (doctors run Windows 7/8.1); the Inter and JetBrains Mono fonts are in the bundle instead of Google Fonts —
   there are no external requests.
 

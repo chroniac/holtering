@@ -49,6 +49,14 @@ pyproject.toml              uv workspace root: dev group, import-linter contract
 packages/scp-holter         scp_holter — LabTech SCP-ECG parser, EDF+/SVG/CSV/NPY export, scp-holter CLI
 packages/holtering          holtering — settings.py, cli.py, api/, analysis/
 frontend/                   Vite + TypeScript, Bun + Biome; build output in frontend/dist
+  src/main.ts               fonts + boot()
+  src/app/                  composition root: state.ts, actions.ts, keyboard.ts, stats.ts, boot.ts
+  src/api/                  wire types (types.ts) and the fetch client (client.ts)
+  src/lib/                  pure, DOM-free logic: time, nav (ranges/zoom), verdict, leads
+  src/ui/                   shared DOM widgets: dom (el/svg), tabs, segbar, dumbbell
+  src/views/<name>/         one folder per view: model.ts (types + pure logic), render.ts (DOM), index.ts
+  tests/                    bun test for lib/, views/*/model.ts and app/state.ts
+  plugins/prefer-arrow.grit Biome plugin: no function declarations
 tests/                      pytest; synth.py — synthetic record generator
 scripts/                    comment and commit checks
 docs/                       ADRs, modules, operations, CHANGELOG
