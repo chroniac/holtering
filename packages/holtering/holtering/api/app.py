@@ -1,11 +1,16 @@
 """Сборка Litestar: контейнер зависимостей, ошибки в problem+json, собранный фронтенд."""
 
-from __future__ import annotations
+from http import HTTPStatus
 
 from dishka import Provider, Scope, make_async_container, provide
 from dishka.integrations.litestar import setup_dishka
 from litestar import Litestar, get
-from litestar.plugins.problem_details import ProblemDetailsConfig, ProblemDetailsPlugin
+from litestar.exceptions import HTTPException
+from litestar.plugins.problem_details import (
+    ProblemDetailsConfig,
+    ProblemDetailsException,
+    ProblemDetailsPlugin,
+)
 from litestar.response import File
 from litestar.static_files import create_static_files_router
 from litestar.types import ControllerRouterHandler
@@ -34,6 +39,17 @@ class RecordProvider(Provider):
         return self._state
 
 
+def _problem(exc: HTTPException) -> ProblemDetailsException:
+    """RFC 9457: `title` — общее имя класса ошибки, `detail` — что именно случилось."""
+    return ProblemDetailsException(
+        status_code=exc.status_code,
+        title=HTTPStatus(exc.status_code).phrase,
+        detail=exc.detail,
+        extra=exc.extra,
+        headers=exc.headers,
+    )
+
+
 def create_app(settings: Settings, state: State) -> Litestar:
     container = make_async_container(RecordProvider(settings, state))
     handlers: list[ControllerRouterHandler] = [api_router]
@@ -51,7 +67,11 @@ def create_app(settings: Settings, state: State) -> Litestar:
         ]
     app = Litestar(
         route_handlers=handlers,
-        plugins=[ProblemDetailsPlugin(ProblemDetailsConfig(enable_for_all_http_exceptions=True))],
+        plugins=[
+            ProblemDetailsPlugin(
+                ProblemDetailsConfig(exception_to_problem_detail_map={HTTPException: _problem})
+            )
+        ],
         on_shutdown=[container.close],
         logging_config=None,
     )
