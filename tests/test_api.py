@@ -81,12 +81,14 @@ def test_manual_label_changes_the_verdict_and_survives_restart(
 
 
 def test_added_beat_lands_in_time_order(client: TestClient, record: Synthetic) -> None:
-    # Midway between two device beats: an insert closer than 120 ms to a beat is refused.
-    left, right = record.beats[400], record.beats[401]
-    t_ms = (left.t_ms + right.t_ms) // 2
+    # The middle of the known 2.5 s pause: an insert closer than 120 ms to a beat is refused.
+    assert record.pause_ms is not None
+    t_ms = sum(record.pause_ms) // 2
 
-    info = client.post("/api/beats/add", json={"t_ms": t_ms, "label": "V"}).json()
+    response = client.post("/api/beats/add", json={"t_ms": t_ms, "label": "V"})
 
+    assert response.status_code == 200
+    info = response.json()
     assert info["added"] is True
     assert info["t_ms"] == t_ms
     assert info["manual"] == "V"

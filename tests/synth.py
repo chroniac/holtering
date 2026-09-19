@@ -82,17 +82,37 @@ def _rhythm(seconds: int, rng: np.random.Generator) -> tuple[list[Beat], tuple[i
         420: "S",
         480: "pause",
     }
+
+    def event_at(n: int) -> str | None:
+        """First 1000 beats — the fixed script the tests rely on; beyond that (long records
+        for benchmarks and screenshots) ectopy is spread over the day."""
+        if n < 1000:
+            return ectopic_at.get(n)
+        if n == 30000:
+            return "V-run"
+        if n % 9000 == 0:
+            return "V-pair"
+        if n % 400 == 0:
+            return "V"
+        if n % 700 == 0:
+            return "S"
+        return None
+
     while t < seconds * 1000 - 1000:
-        event = ectopic_at.get(n)
+        event = event_at(n)
         beats.append(Beat(t, "N", "N"))
         n += 1
         rr = rr_at(t)
         step = int(rr * (1 + rng.normal(0, 0.02)))
-        if event == "V-pair":
+        if event in ("V-pair", "V-run", "V"):
+            count = {"V": 1, "V-pair": 2, "V-run": 3}[event]
             t1 = t + int(0.6 * rr)
-            t2 = t1 + int(0.55 * rr)
-            beats += [Beat(t1, "V", "V"), Beat(t2, "V", "V")]
-            t = t + 2 * step + int(0.4 * rr)
+            for _ in range(count):
+                beats.append(Beat(t1, "V", "V"))
+                t1 += int(0.55 * rr)
+            after_pair = t + 2 * step + int(0.4 * rr)
+            after_last_v = t1 - int(0.55 * rr) + int(1.4 * rr)
+            t = after_pair if count == 2 else after_last_v
             continue
         if event == "S":
             t1 = t + int(0.65 * rr)
