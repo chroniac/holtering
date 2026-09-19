@@ -39,6 +39,9 @@ before the edits, `… capture after` afterwards and
 `… compare before after` — the 2xx bodies must match byte for byte (except
 `computed_s`), and for errors the statuses are compared.
 
+Timings for the README come from `uv run python tests/synth.py bench 86400 && uv run python scripts/bench.py bench`
+(a 24-hour synthetic record; `bench/` is ignored by git).
+
 ## Repository layout
 
 ```
