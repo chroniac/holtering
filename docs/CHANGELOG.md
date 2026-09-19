@@ -20,6 +20,11 @@ versions are semver by Conventional Commits. Every change adds a line under
   analysis (NN intervals, runs, sleep, verdicts on the synthetic record).
 - Documentation of the method in `docs/modules/analysis.md` and of the format in `docs/modules/scp-holter.md`,
   of the settings in `docs/operations/config.md`, of development in `docs/operations/dev.md`.
+- README with screenshots of the four views (`docs/img/`) and measurements on a synthetic
+  24-hour record; `scripts/bench.py` reproduces the table (cold/warm start, recompute,
+  endpoints, working set).
+- The synthetic record has a circadian heart rate (night dip to ~54/min), so sleep estimation
+  and day/night statistics are exercised on a 24-hour run.
 
 ### Changed
 - uv workspace of two packages: `packages/scp-holter` (parser, CLI `scp-holter`) and
