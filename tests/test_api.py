@@ -80,16 +80,20 @@ def test_manual_label_changes_the_verdict_and_survives_restart(
         assert restarted.get("/api/summary").json()["counts"]["manual"] == 1
 
 
-def test_added_beat_lands_in_time_order(client: TestClient) -> None:
-    info = client.post("/api/beats/add", json={"t_ms": 300_000, "label": "V"}).json()
+def test_added_beat_lands_in_time_order(client: TestClient, record: Synthetic) -> None:
+    # Midway between two device beats: an insert closer than 120 ms to a beat is refused.
+    left, right = record.beats[400], record.beats[401]
+    t_ms = (left.t_ms + right.t_ms) // 2
+
+    info = client.post("/api/beats/add", json={"t_ms": t_ms, "label": "V"}).json()
 
     assert info["added"] is True
-    assert info["t_ms"] == 300_000
+    assert info["t_ms"] == t_ms
     assert info["manual"] == "V"
-    window = client.get("/api/beats", params={"start": 297, "dur": 6}).json()
+    window = client.get("/api/beats", params={"start": t_ms / 1000 - 3, "dur": 6}).json()
     assert window["t_ms"] == sorted(window["t_ms"])
-    assert 300_000 in window["t_ms"]
-    assert window["first_index"] + window["t_ms"].index(300_000) == info["index"]
+    assert t_ms in window["t_ms"]
+    assert window["first_index"] + window["t_ms"].index(t_ms) == info["index"]
 
 
 def test_manual_noise_span_marks_windows_and_can_be_cleared(client: TestClient) -> None:

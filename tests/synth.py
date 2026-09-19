@@ -60,9 +60,15 @@ def _beat_shape(t: np.ndarray, centre_s: float, amp: float, kind: str) -> np.nda
 
 
 def _rhythm(seconds: int, rng: np.random.Generator) -> tuple[list[Beat], tuple[int, int]]:
-    """Синус 70/мин с лёгкой вариабельностью и вкраплениями: пара ЖЭС, три НЖЭС, ложная V,
+    """Синус ~70/мин с ночным замедлением до ~54 и вкраплениями: пара ЖЭС, три НЖЭС, ложная V,
     двойной счёт, пауза 2.5 с."""
-    rr = 857
+
+    def rr_at(t_ms: int) -> int:
+        hour = (PATIENT.acq_time[0] + PATIENT.acq_time[1] / 60 + t_ms / 3.6e6) % 24
+        night = np.exp(-(((hour - 3) / 2.5) ** 2))
+        return round(60000 / (72 - 18 * night))
+
+    rr = rr_at(0)
     beats: list[Beat] = []
     t = 600
     n = 0
@@ -80,6 +86,7 @@ def _rhythm(seconds: int, rng: np.random.Generator) -> tuple[list[Beat], tuple[i
         event = ectopic_at.get(n)
         beats.append(Beat(t, "N", "N"))
         n += 1
+        rr = rr_at(t)
         step = int(rr * (1 + rng.normal(0, 0.02)))
         if event == "V-pair":
             t1 = t + int(0.6 * rr)
