@@ -37,9 +37,7 @@ def scan(path: Path) -> list[str]:
                 )
             run_start, run = 0, 0
     if run > MAX_BLOCK:
-        errors.append(
-            f"{path}:{run_start}: comment block of {run} lines (maximum {MAX_BLOCK})"
-        )
+        errors.append(f"{path}:{run_start}: comment block of {run} lines (maximum {MAX_BLOCK})")
     return errors
 
 
