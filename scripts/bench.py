@@ -15,6 +15,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
+import psutil
 from litestar.testing import TestClient
 
 from holtering.analysis import build
@@ -36,37 +37,7 @@ def timed[T](fn: Callable[[], T], repeat: int) -> tuple[float, T]:
 
 
 def rss_mb() -> float:
-    if sys.platform == "win32":
-        import ctypes
-        import ctypes.wintypes as wt
-
-        class Counters(ctypes.Structure):
-            _fields_ = [
-                ("cb", wt.DWORD),
-                ("PageFaultCount", wt.DWORD),
-                ("PeakWorkingSetSize", ctypes.c_size_t),
-                ("WorkingSetSize", ctypes.c_size_t),
-                ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
-                ("QuotaPagedPoolUsage", ctypes.c_size_t),
-                ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
-                ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
-                ("PagefileUsage", ctypes.c_size_t),
-                ("PeakPagefileUsage", ctypes.c_size_t),
-            ]
-
-        counters = Counters()
-        counters.cb = ctypes.sizeof(Counters)
-        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]  # Windows only
-        # The pseudo-handle is -1 and pointer-sized: the default c_int restype truncates it on x64.
-        kernel32.GetCurrentProcess.restype = ctypes.c_void_p
-        kernel32.K32GetProcessMemoryInfo.argtypes = [ctypes.c_void_p, ctypes.c_void_p, wt.DWORD]
-        kernel32.K32GetProcessMemoryInfo(
-            kernel32.GetCurrentProcess(), ctypes.byref(counters), counters.cb
-        )
-        return counters.WorkingSetSize / 2**20
-    import resource
-
-    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+    return psutil.Process().memory_info().rss / 1e6
 
 
 def main(argv: list[str]) -> int:
@@ -91,12 +62,17 @@ def main(argv: list[str]) -> int:
         api={"static_dir": None},
     )
     rows: list[tuple[str, str]] = []
-    size_mb = settings.record.scp.stat().st_size / 2**20
+    size_mb = settings.record.scp.stat().st_size / 1e6
 
     cold_ms, state = timed(lambda: build(settings.record), 1)
-    rows.append(("cold start: parse + heavy pass + first recompute", f"{cold_ms / 1000:.1f} s"))
+    rows.append(
+        (
+            "first start: parse + heavy pass + recompute (file in OS page cache)",
+            f"{cold_ms / 1000:.1f} s",
+        )
+    )
     warm_ms, state = timed(lambda: build(settings.record), 1)
-    rows.append(("warm start: parse + cached heavy pass + recompute", f"{warm_ms:.0f} ms"))
+    rows.append(("next start: parse + cached heavy pass + recompute", f"{warm_ms:.0f} ms"))
     beats = len(state.t_ms)
     recompute_ms, _ = timed(state.recompute, args.repeat)
     rows.append(("recompute() after a label edit", f"{recompute_ms:.0f} ms"))
@@ -120,17 +96,17 @@ def main(argv: list[str]) -> int:
     ]
     for label, path, params in endpoints:
         ms, response = timed(lambda p=path, q=params: client.get(p, params=q), args.repeat)
-        size = len(response.content) / 1024
-        rows.append((label, f"{ms:.0f} ms, {size:.0f} KiB"))
+        size = len(response.content) / 1e3
+        rows.append((label, f"{ms:.0f} ms, {size:.0f} kB"))
     k = int(beats // 2)
     ms, _ = timed(lambda: client.post(f"/api/annotations/{k}", json={"label": "V"}), args.repeat)
     rows.append(("POST /api/annotations/{index} (label edit + recompute)", f"{ms:.0f} ms"))
     client.post(f"/api/annotations/{k}", json={"label": None})
-    rows.append(("process working set after all of the above", f"{rss_mb():.0f} MiB"))
+    rows.append(("process RSS after all of the above", f"{rss_mb():.0f} MB"))
 
     out = sys.stdout
     out.write(
-        f"Record: {size_mb:.0f} MB, {state.total_ms / 3.6e6:.1f} h, {beats:,} beats, "
+        f"Record: {size_mb:.0f} MB (file just written, so it sits in the OS page cache), {state.total_ms / 3.6e6:.1f} h, {beats:,} beats, "
         f"{state.rec.n_leads} leads @ {state.fs} Hz. "
         f"{platform.python_implementation()} {platform.python_version()}, {platform.system()}.\n\n"
     )
