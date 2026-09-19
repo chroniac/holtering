@@ -6,9 +6,17 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "check": "biome check .",
+    "fix": "biome check --write .",
+    "comments": "bun scripts/check-comments.ts",
+    "typecheck": "tsc --noEmit",
+    "version:bump": "bun pm version --no-git-tag-version"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.14",
+    "@fontsource-variable/inter": "5.2.8",
+    "@fontsource-variable/jetbrains-mono": "5.3.0",
     "typescript": "^5.6.0",
     "vite": "^6.0.0"
   }

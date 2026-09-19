@@ -11,7 +11,7 @@ const VERDICT_LABEL: Record<string, string> = { artifact: "артефакт", re
 
 export function renderEpisodes(sum: Summary, episodes: Episode[], onPick: (ep: Episode) => void): EpisodesView {
   const root = el("div", "side-tab");
-  // the five findings a Holter read decides on, before the episode list
+  // пять находок расшифровки, перед списком эпизодов
   const crit = el("div", "criteria");
   for (const c of sum.criteria) {
     const row = el("div", `crow ${c.met === true ? "met" : c.met === false ? "clear" : "na"}`);
@@ -28,10 +28,12 @@ export function renderEpisodes(sum: Summary, episodes: Episode[], onPick: (ep: E
     const c = el("button", `chip on ${v}`, VERDICT_LABEL[v]);
     c.addEventListener("click", () => {
       on[v] = !on[v];
-      c.classList.toggle("on", on[v]); c.classList.toggle("off", !on[v]);
+      c.classList.toggle("on", on[v]);
+      c.classList.toggle("off", !on[v]);
       list();
     });
-    chips[v] = c; filters.append(c);
+    chips[v] = c;
+    filters.append(c);
   }
   head.append(filters);
   root.append(head);
@@ -62,20 +64,29 @@ export function renderEpisodes(sum: Summary, episodes: Episode[], onPick: (ep: E
 
   const foot = el("div", "side-foot");
   const c = sum.counts;
-  const runsDev = episodes.filter((e) => e.kind === "v-run" && e.title.startsWith("«")).length + episodes.filter((e) => e.kind === "v-run" && !e.title.startsWith("«")).length;
+  const runsDev =
+    episodes.filter((e) => e.kind === "v-run" && e.title.startsWith("«")).length +
+    episodes.filter((e) => e.kind === "v-run" && !e.title.startsWith("«")).length;
   const runsKept = episodes.filter((e) => e.kind === "v-run" && e.verdict !== "artifact").length;
   const svtDev = episodes.filter((e) => e.kind === "s-run").length;
   const svtKept = episodes.filter((e) => e.kind === "s-run" && e.verdict !== "artifact").length;
-  foot.append(dumbbell([
-    { label: "ЖЭС", before: c.device.V, after: c.audited.V },
-    { label: "НЖЭС", before: c.device.S, after: c.audited.S },
-    { label: "залпы ЖЭС", before: runsDev, after: runsKept },
-    { label: "НЖ-залпы", before: svtDev, after: svtKept },
-    { label: "паузы", before: c.pauses_device, after: c.pauses_real, accent: c.pauses_real > 0 },
-  ], ["прибор → аудит", `QRS синус ${sum.calibration.sinus_width_ms} мс`]));
+  foot.append(
+    dumbbell(
+      [
+        { label: "ЖЭС", before: c.device.V, after: c.audited.V },
+        { label: "НЖЭС", before: c.device.S, after: c.audited.S },
+        { label: "залпы ЖЭС", before: runsDev, after: runsKept },
+        { label: "НЖ-залпы", before: svtDev, after: svtKept },
+        { label: "паузы", before: c.pauses_device, after: c.pauses_real, accent: c.pauses_real > 0 },
+      ],
+      ["прибор → аудит", `QRS синус ${sum.calibration.sinus_width_ms} мс`],
+    ),
+  );
   const actions = el("div", "side-actions");
   const meta = el("span", "mono muted", `аудит ${sum.computed_s} с · вручную ${c.manual + c.added + c.quality_spans}`);
-  const exp = el("a", "btn", "экспорт"); (exp as HTMLAnchorElement).href = "/api/export"; (exp as HTMLAnchorElement).download = "holtering-export.json";
+  const exp = el("a", "btn", "экспорт");
+  (exp as HTMLAnchorElement).href = "/api/export";
+  (exp as HTMLAnchorElement).download = "holtering-export.json";
   exp.title = "исправленная разметка, эпизоды и сводка (JSON)";
   actions.append(meta, exp);
   foot.append(actions);

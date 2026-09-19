@@ -1,0 +1,38 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.14/schema.json",
+  // .gitignore лежит в корне репозитория, не здесь, поэтому игнор задан списком, а не через vcs
+  "files": { "includes": ["**", "!dist", "!node_modules"] },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 120,
+    "lineEnding": "lf"
+  },
+  "javascript": {
+    "formatter": { "quoteStyle": "double", "trailingCommas": "all", "semicolons": "always" }
+  },
+  "css": { "formatter": { "quoteStyle": "double" } },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true,
+      "correctness": {
+        "noInvalidUseBeforeDeclaration": "error",
+        "noUnusedVariables": "error",
+        "noUnusedImports": "error"
+      },
+      "suspicious": { "noAssignInExpressions": "off" },
+      // noDescendingSpecificity: порядок правил в styles.css задан по смыслу (состояния после базовых), не по специфичности
+      // noNonNullAssertion: `!` ничего не порождает в рантайме, а предлагаемая замена на `?.` меняет поведение отрисовки
+      "style": {
+        "noParameterAssign": "off",
+        "useTemplate": "off",
+        "noDescendingSpecificity": "off",
+        "noNonNullAssertion": "off"
+      },
+      "complexity": { "noForEach": "off", "useLiteralKeys": "off", "noImportantStyles": "off" }
+    }
+  },
+  "assist": { "actions": { "source": { "organizeImports": "on" } } }
+}

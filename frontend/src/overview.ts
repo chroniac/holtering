@@ -1,16 +1,24 @@
 import type { Episode, Overview, Summary } from "./api";
-import { type DragMode, type Range, clampRange, cursorFor, hitRange, wheelIntent, zoomAround } from "./nav";
+import { clampRange, cursorFor, type DragMode, hitRange, type Range, wheelIntent, zoomAround } from "./nav";
 import { clock, el, svg } from "./util";
 
-const PAD_L = 34, PAD_R = 12, PAD_T = 8;
-const ECT_H = 30, NOISE_H = 8, AX_H = 18, HR_MIN = 60;
-let H = 168, HR_H = 78;                      // recomputed from the container on every draw
-const BIN_MIN = 10, HANDLE_W = 6;
-export const CTX_MIN = 60, CTX_MAX = 3 * 3600;
+const PAD_L = 34,
+  PAD_R = 12,
+  PAD_T = 8;
+const ECT_H = 30,
+  NOISE_H = 8,
+  AX_H = 18,
+  HR_MIN = 60;
+let H = 168,
+  HR_H = 78; // пересчитывается от контейнера на каждой отрисовке
+const BIN_MIN = 10,
+  HANDLE_W = 6;
+export const CTX_MIN = 60,
+  CTX_MAX = 3 * 3600;
 
 export interface OverviewView {
   root: HTMLElement;
-  /** Draw the context range (what the minimap shows) and the strip position inside it. */
+  /** Нарисовать контекст (то, что показывает миникарта) и положение ленты внутри него. */
   setContext(ctx: Range, strip: Range): void;
   setActiveEpisode(id: number | null): void;
   update(ov: Overview, episodes: Episode[]): void;
@@ -18,19 +26,29 @@ export interface OverviewView {
 }
 
 /**
- * 24-hour overview. Its selection is the CONTEXT range (1 min – 3 h) that the
- * minimap expands; the strip window itself is far too small to brush here (10 s
- * is 0.2 px on a 24 h axis), so it is only shown as a hairline.
+ * Суточный обзор: выделение здесь — контекст (1 мин – 3 ч), который разворачивает миникарта.
+ * Само окно ленты выделять нечем (10 с — это 0,2 px на суточной оси), оно показано волоском.
  */
 export function renderOverview(
-  sum: Summary, ov0: Overview, episodes0: Episode[],
-  onContext: (ctx: Range, live: boolean) => void, onEpisode: (ep: Episode) => void,
+  sum: Summary,
+  ov0: Overview,
+  episodes0: Episode[],
+  onContext: (ctx: Range, live: boolean) => void,
+  onEpisode: (ep: Episode) => void,
 ): OverviewView {
-  let ov = ov0, episodes = episodes0;
+  let ov = ov0,
+    episodes = episodes0;
   const root = el("div", "ov card");
   const head = el("div", "card-head");
   const ttl = el("div", "card-titles");
-  ttl.append(el("div", "card-title", "24 часа"), el("div", "card-sub", `${clock(sum.record.start, 0).slice(0, 5)} → ${clock(sum.record.start, sum.record.duration_s).slice(0, 5)} · ЧСС, экстрасистолы, помехи, сон`));
+  ttl.append(
+    el("div", "card-title", "24 часа"),
+    el(
+      "div",
+      "card-sub",
+      `${clock(sum.record.start, 0).slice(0, 5)} → ${clock(sum.record.start, sum.record.duration_s).slice(0, 5)} · ЧСС, экстрасистолы, помехи, сон`,
+    ),
+  );
   head.append(el("div", "card-icon", "◔"), ttl);
   const legend = el("div", "legend");
   legend.innerHTML =
@@ -51,19 +69,24 @@ export function renderOverview(
   const tip = el("div", "tip small");
   document.body.append(tip);
 
-  let box: SVGRectElement | null = null, hL: SVGRectElement | null = null, hR: SVGRectElement | null = null;
-  let hair: SVGRectElement | null = null, brush: SVGRectElement | null = null;
+  let box: SVGRectElement | null = null,
+    hL: SVGRectElement | null = null,
+    hR: SVGRectElement | null = null;
+  let hair: SVGRectElement | null = null,
+    brush: SVGRectElement | null = null;
   let epNodes: Record<number, SVGGElement> = {};
   let W = width();
-  let ctx: Range = { start: 0, dur: 300 }, strip: Range = { start: 0, dur: 10 };
-  let events: number[] = []; let evLayer: SVGGElement | null = null;
+  let ctx: Range = { start: 0, dur: 300 },
+    strip: Range = { start: 0, dur: 10 };
+  let events: number[] = [];
+  let evLayer: SVGGElement | null = null;
   const x = (sec: number) => PAD_L + (sec / total) * (W - PAD_L - PAD_R);
   const sec = (px: number) => ((px - PAD_L) / (W - PAD_L - PAD_R)) * total;
 
   function draw() {
     W = width();
     H = height();
-    HR_H = Math.max(HR_MIN, H - PAD_T - ECT_H - NOISE_H - AX_H - 14);       // HR pane takes whatever is left
+    HR_H = Math.max(HR_MIN, H - PAD_T - ECT_H - NOISE_H - AX_H - 14); // панели ЧСС достаётся вся остальная высота
     s.setAttribute("viewBox", `0 0 ${W} ${H}`);
     s.style.height = `${H}px`;
     s.innerHTML = "";
@@ -72,18 +95,29 @@ export function renderOverview(
     const start = new Date(sum.record.start.replace(" ", "T"));
     const bandH = HR_H + ECT_H + NOISE_H + 6;
     const defs = svg("defs");
-    defs.innerHTML = `<pattern id="dotgrid" width="8" height="8" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="0.8" fill="#eed3d6"/></pattern>` +
+    defs.innerHTML =
+      `<pattern id="dotgrid" width="8" height="8" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="0.8" fill="#eed3d6"/></pattern>` +
       `<pattern id="hatch" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="2" height="5" fill="#c8102e" opacity="0.7"/></pattern>`;
     s.append(defs, svg("rect", { x: PAD_L, y: PAD_T, width: plotW, height: HR_H + ECT_H + 6, fill: "url(#dotgrid)" }));
 
     for (let m = 0; m < ov.minute_hr.length; m++) {
       const d = new Date(start.getTime() + m * 60000);
-      if (d.getHours() < 6) s.append(svg("rect", { class: "night", x: x(m * 60), y: PAD_T, width: Math.max(1, plotW / (total / 60)), height: bandH }));
+      if (d.getHours() < 6)
+        s.append(
+          svg("rect", {
+            class: "night",
+            x: x(m * 60),
+            y: PAD_T,
+            width: Math.max(1, plotW / (total / 60)),
+            height: bandH,
+          }),
+        );
     }
     for (const [a, b] of ov.sleep) {
       s.append(svg("rect", { class: "sleep", x: x(a * 60), y: PAD_T, width: x(b * 60) - x(a * 60), height: bandH }));
       const t = svg("text", { class: "sleep-lbl", x: x(a * 60) + 4, y: PAD_T + 11 });
-      t.textContent = `сон ${clock(sum.record.start, a * 60).slice(0, 5)}–${clock(sum.record.start, b * 60).slice(0, 5)}`; s.append(t);
+      t.textContent = `сон ${clock(sum.record.start, a * 60).slice(0, 5)}–${clock(sum.record.start, b * 60).slice(0, 5)}`;
+      s.append(t);
     }
 
     const hrs = ov.minute_hr.map((v) => v ?? NaN);
@@ -91,90 +125,140 @@ export function renderOverview(
     const lo = Math.max(30, Math.floor(Math.min(...finite) / 10) * 10 - 10);
     const hi = Math.ceil(Math.max(...finite) / 10) * 10 + 10;
     const y = (v: number) => PAD_T + HR_H - ((v - lo) / (hi - lo)) * HR_H;
-    let d = "", area = "", open = false;
+    let d = "",
+      area = "",
+      open = false;
     hrs.forEach((v, m) => {
-      if (Number.isNaN(v)) { if (open) area += "Z"; open = false; return; }
-      const px = x(m * 60 + 30).toFixed(1), py = y(v).toFixed(1);
+      if (Number.isNaN(v)) {
+        if (open) area += "Z";
+        open = false;
+        return;
+      }
+      const px = x(m * 60 + 30).toFixed(1),
+        py = y(v).toFixed(1);
       d += (open ? "L" : "M") + px + " " + py;
       area += open ? `L${px} ${py}` : `M${px} ${(PAD_T + HR_H).toFixed(1)}L${px} ${py}`;
       if (m === hrs.length - 1 || Number.isNaN(hrs[m + 1] ?? NaN)) area += `L${px} ${(PAD_T + HR_H).toFixed(1)}Z`;
       open = true;
     });
     s.append(svg("path", { class: "hr-area", d: area }), svg("path", { class: "hr-line", d }));
-    // clinical thresholds: dashed lines with a label, like an alert line
-    for (const [v, txt] of [[100, "тахи >100"], [50, "бради <50"]] as [number, string][]) {
+    // клинические пороги: пунктир с подписью
+    for (const [v, txt] of [
+      [100, "тахи >100"],
+      [50, "бради <50"],
+    ] as [number, string][]) {
       if (v <= lo || v >= hi) continue;
       s.append(svg("line", { class: "thr", x1: PAD_L, x2: W - PAD_R, y1: y(v), y2: y(v) }));
-      const t = svg("text", { class: "thr-lbl", x: W - PAD_R - 2, y: y(v) - 3, "text-anchor": "end" }); t.textContent = txt; s.append(t);
+      const t = svg("text", { class: "thr-lbl", x: W - PAD_R - 2, y: y(v) - 3, "text-anchor": "end" });
+      t.textContent = txt;
+      s.append(t);
     }
     const ax = svg("g", { class: "axis" });
     for (const v of [lo + 10, Math.round((lo + hi) / 20) * 10, hi - 10]) {
       ax.append(svg("line", { x1: PAD_L, x2: W - PAD_R, y1: y(v), y2: y(v) }));
-      const t = svg("text", { x: PAD_L - 4, y: y(v) + 3, "text-anchor": "end" }); t.textContent = String(v); ax.append(t);
+      const t = svg("text", { x: PAD_L - 4, y: y(v) + 3, "text-anchor": "end" });
+      t.textContent = String(v);
+      ax.append(t);
     }
     s.append(ax);
 
-    // ectopy per 10 min as dot stacks: each dot = `unit` beats; audited V filled red,
-    // device-only V hollow, S pink and smaller (right half of the column)
+    // эктопия за 10 мин точками: точка = `unit` комплексов, аудит закрашен, прибор — контуром
     const nb = Math.ceil(ov.minute_v.length / BIN_MIN);
-    const agg = (arr: number[]) => Array.from({ length: nb }, (_, b) => arr.slice(b * BIN_MIN, (b + 1) * BIN_MIN).reduce((p, c) => p + c, 0));
-    const vDev = agg(ov.minute_v_device), vAud = agg(ov.minute_v), sAud = agg(ov.minute_s);
+    const agg = (arr: number[]) =>
+      Array.from({ length: nb }, (_, b) => arr.slice(b * BIN_MIN, (b + 1) * BIN_MIN).reduce((p, c) => p + c, 0));
+    const vDev = agg(ov.minute_v_device),
+      vAud = agg(ov.minute_v),
+      sAud = agg(ov.minute_s);
     const mx = Math.max(1, ...vDev, ...sAud);
-    const rows = 6, unit = Math.max(1, Math.ceil(mx / rows));
-    const y0 = PAD_T + HR_H + 6, bw = plotW / nb, dr = Math.min(2.2, bw * 0.22), dy = ECT_H / rows;
+    const rows = 6,
+      unit = Math.max(1, Math.ceil(mx / rows));
+    const y0 = PAD_T + HR_H + 6,
+      bw = plotW / nb,
+      dr = Math.min(2.2, bw * 0.22),
+      dy = ECT_H / rows;
     for (let b = 0; b < nb; b++) {
       const bx = x(b * BIN_MIN * 60);
       const g = svg("g", { class: "bin" });
       g.append(svg("rect", { class: "bin-hit", x: bx, y: y0, width: Math.max(1, bw), height: ECT_H }));
-      const nDev = Math.ceil(vDev[b] / unit), nAud = Math.ceil(vAud[b] / unit), nS = Math.ceil(sAud[b] / unit);
-      const cxV = bx + bw * 0.33, cxS = bx + bw * 0.7;
+      const nDev = Math.ceil(vDev[b] / unit),
+        nAud = Math.ceil(vAud[b] / unit),
+        nS = Math.ceil(sAud[b] / unit);
+      const cxV = bx + bw * 0.33,
+        cxS = bx + bw * 0.7;
       for (let i = 0; i < Math.min(rows, nDev); i++) {
         const cy = y0 + ECT_H - dy * (i + 0.5);
         g.append(svg("circle", { class: i < nAud ? "dot-v" : "dot-vdev", cx: cxV, cy, r: dr }));
       }
-      for (let i = 0; i < Math.min(rows, nS); i++) g.append(svg("circle", { class: "dot-s", cx: cxS, cy: y0 + ECT_H - dy * (i + 0.5), r: dr * 0.8 }));
+      for (let i = 0; i < Math.min(rows, nS); i++)
+        g.append(svg("circle", { class: "dot-s", cx: cxS, cy: y0 + ECT_H - dy * (i + 0.5), r: dr * 0.8 }));
       g.addEventListener("mousemove", (e) => {
-        tip.innerHTML = `<div class="t">${clock(sum.record.start, b * BIN_MIN * 60).slice(0, 5)}–${clock(sum.record.start, (b + 1) * BIN_MIN * 60).slice(0, 5)}</div>` +
+        tip.innerHTML =
+          `<div class="t">${clock(sum.record.start, b * BIN_MIN * 60).slice(0, 5)}–${clock(sum.record.start, (b + 1) * BIN_MIN * 60).slice(0, 5)}</div>` +
           `<div class="v">ЖЭС ${vAud[b]} <span class="dim">прибор ${vDev[b]}</span> · НЖЭС ${sAud[b]}</div>`;
-        tip.style.left = `${e.clientX + 12}px`; tip.style.top = `${e.clientY + 12}px`; tip.classList.add("show");
+        tip.style.left = `${e.clientX + 12}px`;
+        tip.style.top = `${e.clientY + 12}px`;
+        tip.classList.add("show");
       });
       g.addEventListener("mouseleave", () => tip.classList.remove("show"));
       s.append(g);
     }
-    const lbl = svg("text", { class: "row-lbl", x: PAD_L - 4, y: y0 + ECT_H - 2, "text-anchor": "end" }); lbl.textContent = `● = ${unit}`; s.append(lbl);
-    // peak hour of audited ectopy: dashed box with a label (burst marker)
-    const hourly = Array.from({ length: Math.ceil(ov.minute_v.length / 60) }, (_, hh) => ov.minute_v.slice(hh * 60, (hh + 1) * 60).reduce((p, c) => p + c, 0));
+    const lbl = svg("text", { class: "row-lbl", x: PAD_L - 4, y: y0 + ECT_H - 2, "text-anchor": "end" });
+    lbl.textContent = `● = ${unit}`;
+    s.append(lbl);
+    // час пика эктопии по аудиту: пунктирная рамка с подписью
+    const hourly = Array.from({ length: Math.ceil(ov.minute_v.length / 60) }, (_, hh) =>
+      ov.minute_v.slice(hh * 60, (hh + 1) * 60).reduce((p, c) => p + c, 0),
+    );
     const peakH = hourly.indexOf(Math.max(...hourly));
     if (hourly[peakH] > 0) {
-      const bx0 = x(peakH * 3600), bx1 = x(Math.min(total, (peakH + 1) * 3600));
+      const bx0 = x(peakH * 3600),
+        bx1 = x(Math.min(total, (peakH + 1) * 3600));
       s.append(svg("rect", { class: "peak-box", x: bx0, y: y0 - 2, width: bx1 - bx0, height: ECT_H + 4, rx: 2 }));
       const t = svg("text", { class: "peak-lbl", x: bx1 + 4, y: y0 + 9 });
-      t.textContent = `пик ЖЭС · ${hourly[peakH]} за час`; s.append(t);
+      t.textContent = `пик ЖЭС · ${hourly[peakH]} за час`;
+      s.append(t);
     }
 
-    const yN = y0 + ECT_H + 4, w10 = ov.noise_window_s;
+    const yN = y0 + ECT_H + 4,
+      w10 = ov.noise_window_s;
     let run: number | null = null;
     ov.noise10.forEach((v, i) => {
       const bad = v >= 0.35;
       if (bad && run === null) run = i;
       if ((!bad || i === ov.noise10.length - 1) && run !== null) {
-        const a = x(run * w10), b = x((i + (bad ? 1 : 0)) * w10);
-        s.append(svg("rect", { class: "noise", x: a, y: yN, width: Math.max(1.5, b - a), height: NOISE_H, fill: "url(#hatch)" }));
+        const a = x(run * w10),
+          b = x((i + (bad ? 1 : 0)) * w10);
+        s.append(
+          svg("rect", {
+            class: "noise",
+            x: a,
+            y: yN,
+            width: Math.max(1.5, b - a),
+            height: NOISE_H,
+            fill: "url(#hatch)",
+          }),
+        );
         run = null;
       }
     });
-    const nl = svg("text", { class: "row-lbl", x: PAD_L - 4, y: yN + NOISE_H - 1, "text-anchor": "end" }); nl.textContent = "шум"; s.append(nl);
+    const nl = svg("text", { class: "row-lbl", x: PAD_L - 4, y: yN + NOISE_H - 1, "text-anchor": "end" });
+    nl.textContent = "шум";
+    s.append(nl);
 
     const tax = svg("g", { class: "axis" });
     const yT = yN + NOISE_H + AX_H - 4;
     const firstTick = (2 - (start.getHours() % 2)) * 3600 - start.getMinutes() * 60 - start.getSeconds();
     for (let t = firstTick; t < total; t += 7200) {
       tax.append(svg("line", { x1: x(t), x2: x(t), y1: PAD_T, y2: yN + NOISE_H + 2 }));
-      const tt = svg("text", { x: x(t), y: yT, "text-anchor": "middle" }); tt.textContent = clock(sum.record.start, t).slice(0, 5); tax.append(tt);
+      const tt = svg("text", { x: x(t), y: yT, "text-anchor": "middle" });
+      tt.textContent = clock(sum.record.start, t).slice(0, 5);
+      tax.append(tt);
     }
     s.append(tax);
 
-    evLayer = svg("g", { class: "events" }); s.append(evLayer); drawEvents();
+    evLayer = svg("g", { class: "events" });
+    s.append(evLayer);
+    drawEvents();
     box = svg("rect", { class: "ctx-box", x: PAD_L, y: PAD_T, width: 2, height: bandH + 4, rx: 2 });
     hL = svg("rect", { class: "handle", x: PAD_L, y: PAD_T + bandH / 2 - 10, width: HANDLE_W, height: 20, rx: 2 });
     hR = svg("rect", { class: "handle", x: PAD_L, y: PAD_T + bandH / 2 - 10, width: HANDLE_W, height: 20, rx: 2 });
@@ -187,10 +271,16 @@ export function renderOverview(
       const g = svg("g", { class: `ep ${ep.verdict}` });
       const cy = ep.kind === "pause" ? PAD_T + HR_H - 6 : y0 - 4;
       g.append(svg("circle", { cx: x(ep.t_ms / 1000), cy, r: 3.5 }));
-      const title = svg("title"); title.textContent = `${clock(sum.record.start, ep.t_ms / 1000)} ${ep.title}`; g.append(title);
-      g.addEventListener("click", (e) => { e.stopPropagation(); onEpisode(ep); });
+      const title = svg("title");
+      title.textContent = `${clock(sum.record.start, ep.t_ms / 1000)} ${ep.title}`;
+      g.append(title);
+      g.addEventListener("click", (e) => {
+        e.stopPropagation();
+        onEpisode(ep);
+      });
       g.addEventListener("mousedown", (e) => e.stopPropagation());
-      s.append(g); epNodes[ep.id] = g;
+      s.append(g);
+      epNodes[ep.id] = g;
     }
     place();
   }
@@ -201,25 +291,32 @@ export function renderOverview(
     for (const sec of events) {
       const px = x(sec);
       evLayer.append(svg("path", { class: "evmark", d: `M${px} ${PAD_T - 6} l4 6 l-4 6 l-4 -6 z` }));
-      evLayer.append(svg("line", { class: "evline", x1: px, x2: px, y1: PAD_T, y2: PAD_T + HR_H + ECT_H + NOISE_H + 6 }));
+      evLayer.append(
+        svg("line", { class: "evline", x1: px, x2: px, y1: PAD_T, y2: PAD_T + HR_H + ECT_H + NOISE_H + 6 }),
+      );
     }
   }
 
   function place() {
     if (!box || !hL || !hR || !hair) return;
-    const a = x(ctx.start), b = x(ctx.start + ctx.dur);
-    box.setAttribute("x", String(a)); box.setAttribute("width", String(Math.max(2, b - a)));
-    hL.setAttribute("x", String(a - HANDLE_W / 2)); hR.setAttribute("x", String(b - HANDLE_W / 2));
+    const a = x(ctx.start),
+      b = x(ctx.start + ctx.dur);
+    box.setAttribute("x", String(a));
+    box.setAttribute("width", String(Math.max(2, b - a)));
+    hL.setAttribute("x", String(a - HANDLE_W / 2));
+    hR.setAttribute("x", String(b - HANDLE_W / 2));
     const wide = b - a >= HANDLE_W * 3;
     hL.style.display = hR.style.display = wide ? "" : "none";
     hair.setAttribute("x", String(x(strip.start + strip.dur / 2)));
   }
 
-  // interactions (see nav.ts)
+  // взаимодействия (см. nav.ts)
   let drag: { mode: DragMode; px: number; r: Range } | null = null;
   const pxOf = (e: MouseEvent) => ((e.clientX - s.getBoundingClientRect().left) / s.getBoundingClientRect().width) * W;
   const hit = (p: number) => hitRange(p, x(ctx.start), x(ctx.start + ctx.dur), HANDLE_W, "new");
-  s.addEventListener("mousemove", (e) => { if (!drag) s.style.cursor = cursorFor(hit(pxOf(e))); });
+  s.addEventListener("mousemove", (e) => {
+    if (!drag) s.style.cursor = cursorFor(hit(pxOf(e)));
+  });
   s.addEventListener("mousedown", (e) => {
     const p = pxOf(e);
     drag = { mode: hit(p), px: p, r: { ...ctx } };
@@ -228,39 +325,74 @@ export function renderOverview(
   });
   window.addEventListener("mousemove", (e) => {
     if (!drag) return;
-    const p = pxOf(e), ds = sec(p) - sec(drag.px), r = drag.r;
+    const p = pxOf(e),
+      ds = sec(p) - sec(drag.px),
+      r = drag.r;
     if (drag.mode === "new") {
       if (!brush) return;
-      const a = Math.min(drag.px, p), b = Math.max(drag.px, p);
-      brush.setAttribute("x", String(a)); brush.setAttribute("width", String(b - a));
+      const a = Math.min(drag.px, p),
+        b = Math.max(drag.px, p);
+      brush.setAttribute("x", String(a));
+      brush.setAttribute("width", String(b - a));
     } else if (drag.mode === "move") onContext(clampRange({ start: r.start + ds, dur: r.dur }, total), true);
-    else if (drag.mode === "left") { const nd = Math.max(CTX_MIN, Math.min(CTX_MAX, r.dur - ds)); onContext(clampRange({ start: r.start + r.dur - nd, dur: nd }, total), true); }
-    else if (drag.mode === "right") onContext(clampRange({ start: r.start, dur: Math.max(CTX_MIN, Math.min(CTX_MAX, r.dur + ds)) }, total), true);
+    else if (drag.mode === "left") {
+      const nd = Math.max(CTX_MIN, Math.min(CTX_MAX, r.dur - ds));
+      onContext(clampRange({ start: r.start + r.dur - nd, dur: nd }, total), true);
+    } else if (drag.mode === "right")
+      onContext(clampRange({ start: r.start, dur: Math.max(CTX_MIN, Math.min(CTX_MAX, r.dur + ds)) }, total), true);
   });
   window.addEventListener("mouseup", (e) => {
     if (!drag) return;
-    const p = pxOf(e), d = drag; drag = null; brush?.setAttribute("width", "0");
-    if (d.mode !== "new") { onContext(ctx, false); return; }
-    if (Math.abs(p - d.px) < 3) { onContext(clampRange({ start: sec(p) - ctx.dur / 2, dur: ctx.dur }, total), false); return; }
-    const a = Math.max(0, sec(Math.min(d.px, p))), b = Math.min(total, sec(Math.max(d.px, p)));
+    const p = pxOf(e),
+      d = drag;
+    drag = null;
+    brush?.setAttribute("width", "0");
+    if (d.mode !== "new") {
+      onContext(ctx, false);
+      return;
+    }
+    if (Math.abs(p - d.px) < 3) {
+      onContext(clampRange({ start: sec(p) - ctx.dur / 2, dur: ctx.dur }, total), false);
+      return;
+    }
+    const a = Math.max(0, sec(Math.min(d.px, p))),
+      b = Math.min(total, sec(Math.max(d.px, p)));
     onContext(clampRange({ start: a, dur: Math.max(CTX_MIN, Math.min(CTX_MAX, b - a)) }, total), false);
   });
-  s.addEventListener("wheel", (e) => {
-    const w = wheelIntent(e);
-    if (!w) return;
-    e.preventDefault();
-    if (w.kind === "pan") onContext(clampRange({ start: ctx.start + Math.sign(w.delta) * ctx.dur * 0.25, dur: ctx.dur }, total), false);
-    else onContext(clampRange(zoomAround(ctx, sec(pxOf(e)), w.factor, CTX_MIN, CTX_MAX), total), false);
-  }, { passive: false });
+  s.addEventListener(
+    "wheel",
+    (e) => {
+      const w = wheelIntent(e);
+      if (!w) return;
+      e.preventDefault();
+      if (w.kind === "pan")
+        onContext(clampRange({ start: ctx.start + Math.sign(w.delta) * ctx.dur * 0.25, dur: ctx.dur }, total), false);
+      else onContext(clampRange(zoomAround(ctx, sec(pxOf(e)), w.factor, CTX_MIN, CTX_MAX), total), false);
+    },
+    { passive: false },
+  );
 
   draw();
   new ResizeObserver(() => draw()).observe(root);
 
   return {
     root,
-    setContext(c, st) { ctx = c; strip = st; place(); },
-    setActiveEpisode(id) { for (const [k, g] of Object.entries(epNodes)) g.classList.toggle("active", Number(k) === id); },
-    update(o, eps) { ov = o; episodes = eps; draw(); },
-    setEvents(secs) { events = secs; drawEvents(); },
+    setContext(c, st) {
+      ctx = c;
+      strip = st;
+      place();
+    },
+    setActiveEpisode(id) {
+      for (const [k, g] of Object.entries(epNodes)) g.classList.toggle("active", Number(k) === id);
+    },
+    update(o, eps) {
+      ov = o;
+      episodes = eps;
+      draw();
+    },
+    setEvents(secs) {
+      events = secs;
+      drawEvents();
+    },
   };
 }
