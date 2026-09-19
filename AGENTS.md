@@ -1,62 +1,66 @@
-# AGENTS.md — правила для ИИ-агентов и людей в этом репозитории
+# AGENTS.md — rules for AI agents and humans in this repository
 
-Короткий свод правил для того, кто пишет код здесь. Если правило отсюда
-противоречит привычке — побеждает правило.
+A short set of rules for whoever writes code here. If a rule here conflicts
+with a habit, the rule wins.
 
-## Что это
+## What this is
 
-`holtering` — проверка холтеровской разметки: парсер SCP-ECG экспорта
-LabTech EC-12H / CardioSpy (`packages/scp-holter`), аудит меток прибора и
-печатный протокол (`packages/holtering`, Litestar + numpy, Python 3.14, `uv`),
-интерфейс врача (`frontend`, Vite + TypeScript, Bun + Biome). Поставка —
-web-приложение на нашем сервере, не desktop-exe ([ADR 0001](docs/adr/0001-web-app-not-desktop-exe.md));
-стек и правила — [ADR 0002](docs/adr/0002-stack.md).
+`holtering` is a review tool for Holter annotations: a parser for the SCP-ECG
+export of LabTech EC-12H / CardioSpy (`packages/scp-holter`), an audit of the
+device labels and the printed protocol (`packages/holtering`, Litestar + numpy,
+Python 3.14, `uv`), and the reviewer interface (`frontend`, Vite + TypeScript,
+Bun + Biome). It ships as a web application on our server, not as a desktop exe
+([ADR 0001](docs/adr/0001-web-app-not-desktop-exe.md)); the stack and its rules
+are [ADR 0002](docs/adr/0002-stack.md).
 
-Сначала читать: [docs/README.md](docs/README.md) → [docs/adr/README.md](docs/adr/README.md)
-→ [docs/modules/](docs/modules/). Решение, которого нет в ADR, — не принято;
-предлагай его как ADR, а не как код.
+Read first: [docs/README.md](docs/README.md) → [docs/adr/README.md](docs/adr/README.md)
+→ [docs/modules/](docs/modules/). A decision that is not in an ADR has not been
+made; propose it as an ADR, not as code.
 
-## Границы, которые не переходят
+## Boundaries that are not crossed
 
-- Численный анализ (`holtering/analysis`) детерминирован; пороги и формулы
-  меняются только вместе с записью в `docs/modules/analysis.md` и строкой в
-  CHANGELOG. Рефакторинг обязан давать побайтно те же ответы API на
-  синтетической записи (`tests/synth.py`).
-- Реальные записи (`*.scp`, `qrs.txt`, `*.overrides.json`) в репозиторий не
-  попадают (`.gitignore`); тесты и смоук — только на синтетике.
-- Окружение читает только `holtering/settings.py`; `os.environ` в остальном
-  коде запрещён ruff'ом (`TID251`).
-- `scp_holter` не импортирует `holtering`; внутри приложения
-  `holtering.cli` → `holtering.api` → `holtering.analysis` — держит `lint-imports`.
-- Браузеры врачей — Chrome 109 / Firefox ESR 115 (Windows 7/8.1): фронтенд
-  собирается под этот target, новые CSS/JS-возможности проверяются по нему.
+- Numerical analysis (`holtering/analysis`) is deterministic; thresholds and
+  formulas change only together with an entry in `docs/modules/analysis.md` and
+  a line in the CHANGELOG. A refactor must produce byte-identical API answers on
+  the synthetic record (`tests/synth.py`).
+- Real records (`*.scp`, `qrs.txt`, `*.overrides.json`) never enter the
+  repository (`.gitignore`); tests and smoke runs use synthetic data only.
+- Only `holtering/settings.py` reads the environment; `os.environ` elsewhere is
+  forbidden by ruff (`TID251`).
+- `scp_holter` does not import `holtering`; inside the application
+  `holtering.cli` → `holtering.api` → `holtering.analysis` — enforced by
+  `lint-imports`.
+- Reviewer browsers are Chrome 109 / Firefox ESR 115 (Windows 7/8.1): the
+  frontend is built for that target, and new CSS/JS features are checked
+  against it.
 
-## Код
+## Code
 
-- Обработчик тонкий: guard → сервис → ответ. `State` и анализ не знают о
-  фреймворке.
-- Типы везде: `msgspec.Struct` для ответов и кэша, pydantic — только для
-  `Settings`. `ruff` и `ty` — без замечаний.
-- **Комментарии — только «почему», никогда «что».** Запрещены баннеры и
-  разделители (`# ----`, `// ====`), блоки комментариев длиннее 6 строк,
-  закомментированный код, `# TODO` без ссылки на задачу. Проверяют
+- Handlers are thin: guard → service → response. `State` and the analysis know
+  nothing about the framework.
+- Types everywhere: `msgspec.Struct` for responses and the cache, pydantic only
+  for `Settings`. `ruff` and `ty` must be clean.
+- **Comments explain "why", never "what".** Banners and separators (`# ----`,
+  `// ====`), comment blocks longer than 6 lines, commented-out code and
+  `# TODO` without a task link are forbidden. Enforced by
   `scripts/check_comment_blocks.py`, `frontend/scripts/check-comments.ts`
-  и `ruff` (`ERA001`).
-- Docstring — одна строка и только там, где имени недостаточно. Знания о
-  формате и методике живут в `docs/modules/*.md`.
-- Тесты — на поведение и границы, не на проводку.
+  and `ruff` (`ERA001`).
+- A docstring is one line and only where the name is not enough. Knowledge
+  about formats and methodology lives in `docs/modules/*.md`.
+- Tests cover behaviour and boundaries, not wiring.
 
-## Коммиты и документация
+## Commits and documentation
 
-Conventional Commits, тема ≤ 72 символов, без точки, повелительное
-наклонение, один язык в теме (`scripts/check_commits.py`). Изменение
-поведения — строка в `docs/CHANGELOG.md` под «Unreleased» и правка
-соответствующего `docs/modules/*.md` или `docs/operations/*.md`; сквозное
-решение с альтернативами — новый ADR. Изменил код в `packages/` — подними
-версию пакета: `uv version --package holtering --bump patch|minor|major`
-(парсер — `--package scp-holter`, когда меняется сам).
+Conventional Commits; the subject is in English, lowercase after the colon,
+imperative, ≤ 72 characters, no trailing period (`scripts/check_commits.py`).
+A behaviour change means a line in `docs/CHANGELOG.md` under "Unreleased" and an
+edit to the matching `docs/modules/*.md` or `docs/operations/*.md`; a
+cross-cutting decision with alternatives means a new ADR. If you changed code in
+`packages/`, bump the package version:
+`uv version --package holtering --bump patch|minor|major`
+(the parser is `--package scp-holter`, when it is the one that changed).
 
-## Команды
+## Commands
 
 ```bash
 uv sync --group dev

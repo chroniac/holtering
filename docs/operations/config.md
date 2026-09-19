@@ -1,65 +1,67 @@
-# Конфигурация
+# Configuration
 
-Настройки собираются модулем `holtering.settings`; это единственное место, которое
-читает окружение — остальной код получает готовый `Settings` из контейнера
-зависимостей.
+Settings are assembled by the `holtering.settings` module; it is the only place
+that reads the environment — the rest of the code receives a ready `Settings`
+from the dependency container.
 
-## Источники и приоритет
+## Sources and precedence
 
-Ранний источник побеждает, секции сливаются:
+The earlier source wins, sections are merged:
 
-1. аргументы командной строки (`holtering serve --port 8791`);
-2. переменные окружения `HOLTERING_*`;
-3. файл `holtering.toml` в каталоге конфигурации;
-4. значения по умолчанию.
+1. command-line arguments (`holtering serve --port 8791`);
+2. `HOLTERING_*` environment variables;
+3. the `holtering.toml` file in the configuration directory;
+4. the defaults.
 
-Каталог конфигурации — текущий каталог; переопределяется переменной
-`HOLTERING_CONFIG_DIR` или флагом `--config-dir`. Секретов у приложения нет, отдельного
-файла секретов тоже.
+The configuration directory is the current directory; it is overridden by the
+`HOLTERING_CONFIG_DIR` variable or the `--config-dir` flag. The application has
+no secrets and no separate secrets file.
 
-Вложенность в окружении задаётся двойным подчёркиванием:
+Nesting is expressed in the environment with a double underscore:
 `HOLTERING_RECORD__GAIN=1.35`, `HOLTERING_API__PORT=8791`, `HOLTERING_LOG__LEVEL=DEBUG`.
 
-Незнакомый ключ в файле или секции — ошибка, а не молча проигнорированная опечатка.
+An unknown key in the file or in a section is an error, not a silently ignored
+typo.
 
-## Настройки
+## Settings
 
-### `[record]` — запись
+### `[record]` — the record
 
-| Ключ | Тип | По умолчанию | Смысл |
+| Key | Type | Default | Meaning |
 |---|---|---|---|
-| `scp` | путь | — (обязателен) | файл SCP-ECG с сигналом |
-| `qrs` | путь | — (обязателен) | выгрузка разметки прибора, TSV «время⇥метка», cp1251 |
-| `start` | дата и время | из записи | начало записи; пусто — штамп `DATE…` в имени файла, затем секция 1 |
-| `chest` | список строк | нет | метки каналов 6…, например `["V1","V2","V3","V4","V5","V6"]` |
-| `invert` | да/нет | `false` | сменить знак всех отсчётов (см. docs/modules/scp-holter.md) |
-| `gain` | число | нет | множитель к заявленным мВ/LSB по распечатке CardioSpy; пусто — масштаб некалиброван |
-| `cache_dir` | путь | рядом с записью | куда класть кэш тяжёлого прохода и правки врача |
+| `scp` | path | — (required) | SCP-ECG file with the signal |
+| `qrs` | path | — (required) | export of the device labels, TSV "time⇥label", cp1251 |
+| `start` | date and time | from the record | start of the record; empty — the `DATE…` stamp in the file name, then section 1 |
+| `chest` | list of strings | none | names of channels 6…, for example `["V1","V2","V3","V4","V5","V6"]` |
+| `invert` | yes/no | `false` | flip the sign of all samples (see docs/modules/scp-holter.md) |
+| `gain` | number | none | multiplier for the mV/LSB stated on the CardioSpy printout; empty — the scale is uncalibrated |
+| `cache_dir` | path | next to the record | where to put the heavy-pass cache and the reviewer overrides |
 
-Пустой `cache_dir` означает каталог самой записи. Так кэш и правки едут вместе с
-пациентом, а каталог заведомо доступен на запись. В нём появляются два файла: кэш
-тяжёлого прохода (имя включает размер, mtime, `gain` и `invert`) и
-`<имя>.<ид пациента>.<дата>.overrides.json` с ручными метками, дневником и правками
-протокола.
+An empty `cache_dir` means the directory of the record itself. That way the
+cache and the overrides travel with the patient, and the directory is known to
+be writable. Two files appear in it: the heavy-pass cache (the name includes the
+size, mtime, `gain` and `invert`) and
+`<name>.<patient id>.<date>.overrides.json` with the manual labels, the diary
+and the protocol edits.
 
-Без `gain` амплитуды на распечатках выводятся без масштаба, а ST, T и вольтаж в
-протоколе объявляются неоценёнными.
+Without `gain` the amplitudes on the printouts are shown without a scale, and
+ST, T and voltage are declared unassessed in the protocol.
 
-### `[api]` — сервер
+### `[api]` — the server
 
-| Ключ | Тип | По умолчанию | Смысл |
+| Key | Type | Default | Meaning |
 |---|---|---|---|
-| `host` | строка | `127.0.0.1` | адрес прослушивания |
-| `port` | число | `8790` | порт |
-| `static_dir` | путь | `frontend/dist` репозитория | собранный фронтенд; пусто или каталога нет — отдаётся только API |
+| `host` | string | `127.0.0.1` | listening address |
+| `port` | number | `8790` | port |
+| `static_dir` | path | the repository's `frontend/dist` | the built frontend; empty or a missing directory — only the API is served |
 
-### `[log]` — логи
+### `[log]` — logs
 
-| Ключ | Тип | По умолчанию | Смысл |
+| Key | Type | Default | Meaning |
 |---|---|---|---|
-| `level` | строка | `INFO` | уровень корневого логгера; записи uvicorn идут тем же путём |
+| `level` | string | `INFO` | level of the root logger; uvicorn records go the same way |
 
-## Пример `holtering.toml`
+## Example `holtering.toml`
 
 ```toml
 [record]
@@ -76,25 +78,27 @@ port = 8790
 level = "INFO"
 ```
 
-## Командная строка
+## Command line
 
 ```
 holtering serve [--config-dir DIR] [--data DIR] [--scp FILE] [--qrs FILE]
-                [--start "ГГГГ-ММ-ДД ЧЧ:ММ:СС"] [--chest V1,V2,V3,V4,V5,V6]
+                [--start "YYYY-MM-DD HH:MM:SS"] [--chest V1,V2,V3,V4,V5,V6]
                 [--invert] [--gain X] [--host HOST] [--port PORT]
 holtering config [--config-dir DIR] check
 ```
 
-`--data DIR` — сокращение для `DIR/raw.scp` и `DIR/qrs.txt`. Любой флаг перекрывает и
-окружение, и файл, но только своё поле: `--gain` не стирает остальной `[record]`.
+`--data DIR` is a shorthand for `DIR/raw.scp` and `DIR/qrs.txt`. Any flag
+overrides both the environment and the file, but only its own field: `--gain`
+does not erase the rest of `[record]`.
 
-`holtering config check` печатает каталог конфигурации, содержимое `holtering.toml`,
-переменные `HOLTERING_*`, итоговую конфигурацию и каталог кэша. Возвращает 1, если
-конфигурация не собирается или файлов записи нет.
+`holtering config check` prints the configuration directory, the contents of
+`holtering.toml`, the `HOLTERING_*` variables, the resulting configuration and
+the cache directory. It returns 1 if the configuration does not assemble or the
+record files are missing.
 
-## Быстрый запуск
+## Quick start
 
 ```bash
-uv run python tests/synth.py data 600     # синтетическая запись
+uv run python tests/synth.py data 600     # synthetic record
 uv run holtering serve --data data --start "2026-09-17 09:30:00"
 ```

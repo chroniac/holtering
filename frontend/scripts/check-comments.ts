@@ -1,5 +1,5 @@
-// Ловит то, что Biome не ловит: баннеры-разделители, простыни комментариев, TODO без ссылки.
-// Правила — AGENTS.md → «Код»: блок подряд идущих комментариев ≤ MAX_BLOCK строк.
+// Catches what Biome does not: banner separators, walls of comments, TODO without a link.
+// Rules: AGENTS.md -> Code; a run of consecutive comment lines is at most MAX_BLOCK long.
 import { readdir } from "node:fs/promises";
 import { join, relative } from "node:path";
 
@@ -24,7 +24,7 @@ function scan(path: string, text: string): string[] {
   let runStart = 0;
   let run = 0;
   const flush = () => {
-    if (run > MAX_BLOCK) errors.push(`${path}:${runStart}: блок комментариев на ${run} строк (максимум ${MAX_BLOCK})`);
+    if (run > MAX_BLOCK) errors.push(`${path}:${runStart}: comment block of ${run} lines (maximum ${MAX_BLOCK})`);
     runStart = 0;
     run = 0;
   };
@@ -33,8 +33,8 @@ function scan(path: string, text: string): string[] {
     if (LINE_COMMENT.test(line) && !DIRECTIVE.test(line)) {
       runStart ||= n;
       run += 1;
-      if (BANNER.test(line)) errors.push(`${path}:${n}: баннер-разделитель`);
-      if (TODO.test(line)) errors.push(`${path}:${n}: TODO без ссылки на задачу или Q-NN`);
+      if (BANNER.test(line)) errors.push(`${path}:${n}: banner separator`);
+      if (TODO.test(line)) errors.push(`${path}:${n}: TODO without an issue link`);
     } else flush();
   });
   flush();

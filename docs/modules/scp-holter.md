@@ -1,143 +1,144 @@
-# scp-holter — чтение SCP-ECG экспорта LabTech
+# scp-holter — reading the LabTech SCP-ECG export
 
-## Назначение
+## Purpose
 
-Пакет `scp_holter` читает суточные холтеровские выгрузки регистратора LabTech
-EC-12H / CardioSpy (`*_raw_ECG.scp`): разбирает контейнер SCP-ECG
-(ISO 11073-91064), даёт паспорт пациента, определения отведений, метаданные
-сигнала и сам сигнал — как zero-copy `numpy.memmap` или как отрезок в мВ.
-Экспорт: EDF+C, SVG-лента, `.npy`, `.csv`. Приложение `holtering` использует
-пакет как библиотеку; обратной зависимости нет и не будет
-(держит `lint-imports`).
+The `scp_holter` package reads 24-hour Holter exports of the LabTech
+EC-12H / CardioSpy recorder (`*_raw_ECG.scp`): it parses the SCP-ECG container
+(ISO 11073-91064) and yields the patient record card, lead definitions, signal
+metadata and the signal itself — either as a zero-copy `numpy.memmap` or as a
+segment in mV. Export: EDF+C, SVG strip, `.npy`, `.csv`. The `holtering`
+application uses the package as a library; there is no reverse dependency and
+there never will be (`lint-imports` enforces it).
 
-Проверено на реальной выгрузке 259 МБ / 23.99 ч: 125 Гц, 1747 нВ/LSB как
-объявлено, 12 × 10 794 500 отсчётов `int16 LE` подряд по отведениям начиная с
-байта 445, пики R совпадают с прилагаемым `Qrs.txt` с точностью 1–2 отсчёта.
+Verified on a real 259 MB / 23.99 h export: 125 Hz, 1747 nV/LSB as declared,
+12 × 10 794 500 `int16 LE` samples laid out lead after lead starting at
+byte 445, R peaks matching the accompanying `Qrs.txt` to within 1–2 samples.
 
-Типичное использование:
+Typical use:
 
 ```python
 from scp_holter import ScpHolter, to_edf
 
 rec = ScpHolter("data/raw.scp")
-sig = rec.read(start_s=10800, dur_s=10)  # (12, 1250) float32, мВ
-to_edf(rec, "out/full.edf")  # EDF+C без потерь, записи по 1 с
+sig = rec.read(start_s=10800, dur_s=10)  # (12, 1250) float32, mV
+to_edf(rec, "out/full.edf")  # lossless EDF+C, 1 s records
 ```
 
-## Формат файла
+## File format
 
-Преамбула и заголовки секций — фиксированной ширины, little-endian:
+The preamble and the section headers are fixed-width, little-endian:
 
 ```
-преамбула : CRC-CCITT(2) + длина записи(4)      длина == размеру файла
-заголовок : CRC(2) ID(2) длина(4) версия(1) протокол(1) резерв(6)
-секция 0  : по 10 байт на запись — ID(2) длина(4) индекс(4, 1-based смещение)
+preamble  : CRC-CCITT(2) + record length(4)     length == file size
+header    : CRC(2) ID(2) length(4) version(1) protocol(1) reserved(6)
+section 0 : 10 bytes per entry — ID(2) length(4) index(4, 1-based offset)
 ```
 
-| Секция | Что в ней | Кто читает |
+| Section | What is in it | Who reads it |
 |---|---|---|
-| 0 | таблица указателей на остальные секции | `sections.read_container` |
-| 1 | паспорт пациента и параметры съёма, поток тегов | `patient.parse_patient` |
-| 2 | таблицы Хаффмана | только факт наличия: `record` отказывается читать такой файл |
-| 3 | определения отведений: количество, флаги, диапазоны, идентификаторы каналов | `leads.parse_leads` |
-| 6 | данные ритма: AVM, интервал дискретизации, матрица отсчётов | `signal.parse_signal` |
+| 0 | pointer table to the remaining sections | `sections.read_container` |
+| 1 | patient record card and acquisition parameters, tag stream | `patient.parse_patient` |
+| 2 | Huffman tables | presence only: `record` refuses to read such a file |
+| 3 | lead definitions: count, flags, ranges, channel identifiers | `leads.parse_leads` |
+| 6 | rhythm data: AVM, sampling interval, sample matrix | `signal.parse_signal` |
 
-Секция 1 — поток тегов `тег(1) длина(2) значение(длина)`, признак конца —
-тег 255. Текстовые поля в cp1251 и добиты нулями: прошивка русской локали.
+Section 1 is a stream of `tag(1) length(2) value(length)` entries, terminated
+by tag 255. Text fields are cp1251 and null-padded: a Russian-locale firmware.
 
-Секция 6 начинается с `AVM(2, нВ/LSB) интервал(2, мкс) diff(1) bimodal(1)`,
-затем по одному счётчику байт `u16` на отведение, затем отсчёты. При
-`diff != 0` или наличии секции 2 пакет не угадывает кодирование, а падает с
+Section 6 starts with `AVM(2, nV/LSB) interval(2, µs) diff(1) bimodal(1)`, then
+one `u16` byte counter per lead, then the samples. If `diff != 0` or section 2
+is present, the package does not guess the encoding and fails with
 `NotImplementedError`.
 
-## Отклонения вендора
+## Vendor deviations
 
-Из-за них файл отвергают строгие сторонние парсеры; поэтому пакет разбирает
-контейнер сам, а не берёт готовый ридер.
+They are the reason strict third-party parsers reject the file; hence the
+package parses the container itself instead of taking an off-the-shelf reader.
 
-- **Резервное поле заголовка занулено.** Стандарт требует там строку `SCPECG`.
-- **Версия секции — 10.** Валидаторы ждут 10 в смысле «1.0» или отвергают
-  всё, кроме 20.
-- **Счётчики байт на отведение в секции 6 — `u16` и переполняются.** На суточной
-  записи там лежит 27656 при истинных 21 589 000 (= 27656 mod 65536). Истинную
-  длину даёт только длина самой секции: `(длина секции − заголовок − метаданные)
-  / (2 × число каналов)` — это и есть число отсчётов на отведение. Никогда не
-  верить этим полям.
-- **В `lead_id` секции 3 лежат 0-based индексы каналов (0…11), а не коды
-  отведений SCP.** Код 0 в стандартной таблице означает «не указано», так что
-  принять их за коды нельзя — что это за каналы, установлено из самих данных
-  (ниже).
-- **Отсчёты лежат по отведениям, а не с чередованием**: сначала всё отведение 0,
-  затем всё отведение 1 и так далее. Без секции 2 и без разностного кодирования
-  блок — просто матрица `int16 LE`, поэтому он отображается в память как есть
-  (`signal.memmap`, форма `(n_leads, n_samples)`), без копирования и без
-  распаковки. Отрезок одного отведения — непрерывный кусок файла, его читает
-  `signal.read_lead` обычным `np.fromfile`: в отличие от среза memmap он не
-  отображает затронутые страницы в процесс, поэтому последовательный проход по
-  суточной записи не растит RSS.
+- **The reserved header field is zeroed.** The standard requires the string
+  `SCPECG` there.
+- **The section version is 10.** Validators either expect 10 to mean "1.0" or
+  reject everything except 20.
+- **The per-lead byte counters in section 6 are `u16` and overflow.** On a
+  24-hour record they hold 27656 while the true value is 21 589 000
+  (= 27656 mod 65536). Only the length of the section itself gives the true
+  length: `(section length − header − metadata) / (2 × channel count)` — that is
+  the number of samples per lead. Never trust those fields.
+- **`lead_id` in section 3 holds 0-based channel indices (0…11), not SCP lead
+  codes.** Code 0 in the standard table means "unspecified", so they cannot be
+  taken for codes — which channels these are was established from the data
+  itself (below).
+- **Samples are laid out lead by lead, not interleaved**: first the whole of
+  lead 0, then the whole of lead 1 and so on. Without section 2 and without
+  differential encoding the block is simply an `int16 LE` matrix, so it is
+  mapped into memory as is (`signal.memmap`, shape `(n_leads, n_samples)`),
+  without copying and without decompression. A segment of a single lead is a
+  contiguous piece of the file and `signal.read_lead` reads it with a plain
+  `np.fromfile`: unlike a memmap slice it does not map the touched pages into
+  the process, so a sequential pass over a 24-hour record does not grow RSS.
 
-## Монтаж и полярность
+## Montage and polarity
 
-Конечностные отведения, каналы 0…5 = I II III aVR aVL aVF — **доказано**
-линейными тождествами на реальной записи:
+The limb leads, channels 0…5 = I II III aVR aVL aVF — **proved** by linear
+identities on a real record:
 
-| Тождество | Смысл | rmse |
+| Identity | Meaning | rmse |
 |---|---|---|
-| `ch2 == ch1 - ch0` | III = II − I | 0.000000 мВ |
-| `ch3 == -(ch0 + ch1) / 2` | aVR | 0.000616 мВ |
-| `ch4 == ch0 - ch1 / 2` | aVL | 0.000616 мВ |
-| `ch5 == ch1 - ch0 / 2` | aVF | 0.000620 мВ |
+| `ch2 == ch1 - ch0` | III = II − I | 0.000000 mV |
+| `ch3 == -(ch0 + ch1) / 2` | aVR | 0.000616 mV |
+| `ch4 == ch0 - ch1 / 2` | aVL | 0.000616 mV |
+| `ch5 == ch1 - ch0 / 2` | aVF | 0.000620 mV |
 
-Обратная перестановка (`ch5 = I`, `ch4 = II`, …) промахивается на 0.78 мВ, так
-что соответствие единственно. Но тождества линейны и выполняются и для `−x`:
-они закрепляют **порядок**, а не **знак**.
+The reverse permutation (`ch5 = I`, `ch4 = II`, …) misses by 0.78 mV, so the
+mapping is unique. But the identities are linear and hold for `−x` as well:
+they pin down the **order**, not the **sign**.
 
-Грудные отведения, каналы 6…11 — **порядок не проверен**, данным отвечают две
-гипотезы:
+The chest leads, channels 6…11 — **the order is not verified**, two hypotheses
+fit the data:
 
-- **(a) байты как лежат, порядок по убыванию** (`ch6…ch11 = V6…V1`): R/S растёт
-  монотонно 0.10 → 7.01 от V1 к V6, ось P нормальная синусовая
-  (P = +0.086 мВ в II, −0.046 в aVR).
-- **(b) инверсия знака, порядок по возрастанию** (`ch6…ch11 = V1…V6`): одна
-  инверсия делает ось QRS по конечностным, конкордантность T и переходную зону
-  в V4 хрестоматийными (знаковые площади QRS −48 −69 −56 −3 +50 +62 мВ·мс) —
-  ценой отрицательной оси P (нижнепредсердный / эктопический ритм).
+- **(a) bytes as they lie, descending order** (`ch6…ch11 = V6…V1`): R/S grows
+  monotonically 0.10 → 7.01 from V1 to V6, the P axis is normal sinus
+  (P = +0.086 mV in II, −0.046 in aVR).
+- **(b) sign inversion, ascending order** (`ch6…ch11 = V1…V6`): a single
+  inversion makes the limb-lead QRS axis, the T concordance and the V4
+  transition zone textbook (signed QRS areas −48 −69 −56 −3 +50 +62 mV·ms) — at
+  the price of a negative P axis (low atrial / ectopic rhythm).
 
-PR составляет 176–224 мс при обеих, поэтому он спор не решает. Инвариантный к
-инверсии градиент |P| по блоку — 0.014 0.048 0.086 0.077 0.069 0.058 мВ;
-почти нулевой канал — `ch6`, что подходит V1 (двухфазный P взаимно
-уничтожается) и склоняет к (b).
+PR is 176–224 ms under both, so it does not settle the dispute. The
+inversion-invariant |P| gradient across the block is
+0.014 0.048 0.086 0.077 0.069 0.058 mV; the near-zero channel is `ch6`, which
+fits V1 (a biphasic P cancels itself out) and leans towards (b).
 
-По умолчанию пакет оставляет байты как есть и подписывает грудной блок
-нейтрально (`ch6…ch11`); `--invert` и `--chest` переключают на (b).
+By default the package leaves the bytes as they are and labels the chest block
+neutrally (`ch6…ch11`); `--invert` and `--chest` switch to (b).
 
-### Что не доказано
+### What is not proved
 
-- Порядок грудных отведений: спор рассудит распечатка того же удара из
-  CardioSpy — до неё ни одна из гипотез не выбрана в коде.
-- Абсолютный знак сигнала: линейные тождества к нему нечувствительны.
-- Абсолютное усиление: 1747 нВ/LSB взято из объявления прибора, независимой
-  калибровкой не подтверждено.
+- The order of the chest leads: the dispute will be settled by a CardioSpy
+  printout of the same beat — until then neither hypothesis is chosen in code.
+- The absolute sign of the signal: linear identities are insensitive to it.
+- The absolute gain: 1747 nV/LSB is taken from the device declaration and is
+  not confirmed by an independent calibration.
 
-## Экспорт
+## Export
 
-- **EDF+C** (`export/edf.py`) — записи по 1 секунде, `int16` без пересчёта,
-  без потерь. Заголовок EDF — строгий ASCII фиксированной ширины, поэтому
-  фамилия из cp1251 транслитерируется, а даты пишутся как `dd-MMM-yyyy`.
-  Цифровой диапазон асимметричен (−32768…32767); если сопоставить ему
-  симметричный физический, 1 LSB перестанет равняться объявленному AVM —
-  поэтому `phys_min` и `phys_max` считаются раздельно из `±` границ. Пишется
-  чанками по 600 записей, чтобы суточный файл не собирался в памяти целиком.
-- **SVG** (`export/svg.py`) — клиническая сетка 25 мм/с, 1 мм мелкая / 5 мм
-  крупная клетка, по дорожке на отведение; усиление подбирается из ряда
-  10/5/2.5/2/1 мм/мВ так, чтобы самое размашистое из выбранных отведений
-  ещё помещалось в свою дорожку.
-- **`.npy` и `.csv`** (`export/arrays.py`) — матрица `float32` в мВ и таблица
-  «время + колонка на отведение». Оба учитывают выбранную полярность записи.
+- **EDF+C** (`export/edf.py`) — 1-second records, `int16` without rescaling,
+  lossless. The EDF header is strict fixed-width ASCII, so the cp1251 surname
+  is transliterated and dates are written as `dd-MMM-yyyy`. The digital range
+  is asymmetric (−32768…32767); mapping a symmetric physical range onto it
+  would make 1 LSB stop being equal to the declared AVM — hence `phys_min` and
+  `phys_max` are computed separately from the `±` limits. Written in chunks of
+  600 records so that a 24-hour file is never assembled in memory as a whole.
+- **SVG** (`export/svg.py`) — a clinical grid at 25 mm/s, 1 mm fine / 5 mm
+  coarse cells, one track per lead; the gain is picked from the
+  10/5/2.5/2/1 mm/mV series so that the widest-swinging of the selected leads
+  still fits into its track.
+- **`.npy` and `.csv`** (`export/arrays.py`) — a `float32` matrix in mV and a
+  "time + one column per lead" table. Both honour the selected record polarity.
 
 ## CLI
 
-Точка входа — `scp-holter` (она же `python -m scp_holter`):
+The entry point is `scp-holter` (also `python -m scp_holter`):
 
 ```bash
 scp-holter info data/raw.scp
@@ -147,6 +148,6 @@ scp-holter edf  data/raw.scp out/full.edf
 scp-holter edf  data/raw.scp out/flip.edf --invert --chest V1,V2,V3,V4,V5,V6
 ```
 
-`info` печатает паспорт, состав секций, параметры сигнала и выбранную
-полярность. `--invert` меняет знак всех отсчётов при чтении и при экспорте,
-`--chest` подписывает каналы 6…11 явно.
+`info` prints the record card, the section inventory, the signal parameters and
+the selected polarity. `--invert` flips the sign of all samples both on reading
+and on export, `--chest` labels channels 6…11 explicitly.

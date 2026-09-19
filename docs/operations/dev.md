@@ -1,22 +1,24 @@
-# Локальная разработка
+# Local development
 
-Требования: `uv` ≥ 0.9, Python 3.14 (uv скачает сам), Bun для фронтенда.
+Requirements: `uv` ≥ 0.9, Python 3.14 (uv downloads it itself), Bun for the
+frontend.
 
 ```bash
 uv sync --group dev
-uv run python tests/synth.py data 600     # синтетическая запись: data/raw.scp + data/qrs.txt
+uv run python tests/synth.py data 600     # synthetic record: data/raw.scp + data/qrs.txt
 uv run holtering serve --data data --start "2026-09-17 09:30:00"
-cd frontend && bun install && bun run build && cd ..   # статика для http://127.0.0.1:8790/
-cd frontend && bun run dev                              # dev-сервер с proxy /api → :8790
+cd frontend && bun install && bun run build && cd ..   # static files for http://127.0.0.1:8790/
+cd frontend && bun run dev                              # dev server with proxy /api → :8790
 ```
 
-Реальная запись — `--data <каталог с raw.scp и qrs.txt>` или `--scp`/`--qrs`;
-кэш тяжёлого прохода и ручные правки пишутся рядом с записью
-([config](config.md)). Реальные записи в git не попадают (`.gitignore`).
+For a real record use `--data <directory with raw.scp and qrs.txt>` or
+`--scp`/`--qrs`; the heavy-pass cache and the reviewer overrides are written
+next to the record ([config](config.md)). Real records never enter git
+(`.gitignore`).
 
-## Проверки перед коммитом
+## Checks before a commit
 
-Те же, что в CI (`.github/workflows/check.yml`):
+The same ones as in CI (`.github/workflows/check.yml`):
 
 ```bash
 uv run ruff check . && uv run ruff format --check .
@@ -28,25 +30,26 @@ python scripts/check_commits.py --range origin/main..HEAD
 cd frontend && bun run check && bun run comments && bun run typecheck && bun run build
 ```
 
-`uvx pre-commit install --hook-type pre-commit --hook-type commit-msg` ставит
-те же проверки хуками.
+`uvx pre-commit install --hook-type pre-commit --hook-type commit-msg` installs
+the same checks as hooks.
 
-Рефакторинг анализа или API проверяется снимком ответов на синтетической
-записи: `uv run python scripts/snapshot_api.py capture before` до правок,
-`… capture after` после и `… compare before after` — тела 2xx обязаны
-совпасть побайтно (кроме `computed_s`), у ошибок сравниваются статусы.
+A refactor of the analysis or the API is verified by a snapshot of the answers
+on the synthetic record: `uv run python scripts/snapshot_api.py capture before`
+before the edits, `… capture after` afterwards and
+`… compare before after` — the 2xx bodies must match byte for byte (except
+`computed_s`), and for errors the statuses are compared.
 
-## Устройство репозитория
+## Repository layout
 
 ```
-pyproject.toml              корень uv-workspace: dev-группа, контракты import-linter, ty, pytest
-packages/scp-holter         scp_holter — парсер SCP-ECG LabTech, экспорт EDF+/SVG/CSV/NPY, CLI scp-holter
+pyproject.toml              uv workspace root: dev group, import-linter contracts, ty, pytest
+packages/scp-holter         scp_holter — LabTech SCP-ECG parser, EDF+/SVG/CSV/NPY export, scp-holter CLI
 packages/holtering          holtering — settings.py, cli.py, api/, analysis/
-frontend/                   Vite + TypeScript, Bun + Biome; сборка в frontend/dist
-tests/                      pytest; synth.py — генератор синтетической записи
-scripts/                    проверки комментариев и коммитов
-docs/                       ADR, модули, операции, CHANGELOG
+frontend/                   Vite + TypeScript, Bun + Biome; build output in frontend/dist
+tests/                      pytest; synth.py — synthetic record generator
+scripts/                    comment and commit checks
+docs/                       ADRs, modules, operations, CHANGELOG
 ```
 
-Границы держит `lint-imports`: `scp_holter` не импортирует `holtering`;
-`holtering.cli` → `holtering.api` → `holtering.analysis`.
+The boundaries are held by `lint-imports`: `scp_holter` does not import
+`holtering`; `holtering.cli` → `holtering.api` → `holtering.analysis`.

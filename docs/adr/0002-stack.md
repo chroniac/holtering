@@ -1,63 +1,65 @@
-# 0002. Стек и правила: Litestar, uv-workspace, ruff/ty, msgspec, Dishka, pydantic-settings
+# 0002. Stack and rules: Litestar, uv workspace, ruff/ty, msgspec, Dishka, pydantic-settings
 
-Статус: принято
-Дата: 2026-09-19
+Status: accepted
+Date: 2026-09-19
 
-## Контекст
+## Context
 
-Прототип за четыре коммита: FastAPI в одном файле, argparse + `os.environ`
-в `config.py`, `print` вместо логов, dict'ы вместо типов, без тестов,
-докстринги-эссе, баннеры `# ----`. Впереди — web-приложение с реестром
-записей, загрузкой, учётными записями и журналом доступа
-([ADR 0001](0001-web-app-not-desktop-exe.md)). У сопровождающих уже есть
-продовые сервисы на одном стеке (Litestar, Dishka, guard'ы на маршрутах,
-`Settings` из TOML, журналы) и один свод правил кода; второй диалект ради
-маленького репозитория дороже, чем его повторить целиком.
+A prototype in four commits: FastAPI in a single file, argparse + `os.environ`
+in `config.py`, `print` instead of logs, dicts instead of types, no tests,
+essay-length docstrings, `# ----` banners. Ahead is a web application with a
+record registry, uploads, accounts and an access log
+([ADR 0001](0001-web-app-not-desktop-exe.md)). The maintainers already have
+production services on one stack (Litestar, Dishka, route guards, `Settings`
+from TOML, logs) and one set of code rules; a second dialect for the sake of a
+small repository costs more than repeating that set in full.
 
-## Решение
+## Decision
 
-Тот же стек и те же правила, без адаптации «под маленький проект»:
+The same stack and the same rules, with no adaptation "for a small project":
 
-- uv-workspace из двух пакетов: `packages/scp-holter` (парсер, свой CLI
-  `scp-holter`) и `packages/holtering` (анализ, API, CLI `holtering`);
-  границы держит `import-linter`;
-- Litestar 2.x, обработчики async с `@inject` из Dishka, `msgspec.Struct`
-  для ответов, кэша тяжёлого прохода и overrides-файла; problem+json для
-  ошибок; статика фронтенда с того же процесса;
-- `Settings` (pydantic-settings) из `holtering.toml` + `HOLTERING_*`;
-  `os.environ` — только в `settings.py`; `secrets.toml` появится с первым
-  секретом;
-- `ruff` (полный набор правил из `ruff.toml`), `ty`, pytest на поведение,
-  structlog вместо `print`;
-- комментарии только «почему», докстринги в одну строку, Conventional
-  Commits, документация в том же изменении; проверки
-  `scripts/check_comment_blocks.py`, `scripts/check_commits.py`, во фронте —
-  Biome и `scripts/check-comments.ts`.
+- a uv workspace of two packages: `packages/scp-holter` (parser, its own CLI
+  `scp-holter`) and `packages/holtering` (analysis, API, CLI `holtering`);
+  the boundaries are held by `import-linter`;
+- Litestar 2.x, async handlers with `@inject` from Dishka, `msgspec.Struct`
+  for responses, the heavy-pass cache and the overrides file; problem+json for
+  errors; frontend static files from the same process;
+- `Settings` (pydantic-settings) from `holtering.toml` + `HOLTERING_*`;
+  `os.environ` only in `settings.py`; `secrets.toml` will appear with the first
+  secret;
+- `ruff` (the full rule set from `ruff.toml`), `ty`, pytest on behaviour,
+  structlog instead of `print`;
+- comments only about "why", single-line docstrings, Conventional Commits,
+  documentation in the same change; the checks
+  `scripts/check_comment_blocks.py`, `scripts/check_commits.py`, and on the
+  frontend Biome and `scripts/check-comments.ts`.
 
-Численный анализ при переезде не меняется: ответы API на синтетической
-записи (`tests/synth.py`) совпадают с ответами прототипа побайтно
-(снимок 36 ответов до и после, `scripts/snapshot_api.py`).
+The numerical analysis does not change with the move: the API responses on the
+synthetic record (`tests/synth.py`) match the prototype's responses byte for byte
+(a snapshot of 36 responses before and after, `scripts/snapshot_api.py`).
 
-## Отвергнутые альтернативы
+## Rejected alternatives
 
-- **Оставить FastAPI.** Работает, но guard'ы, DI по областям, SSE и
-  problem+json в Litestar штатные, а в многозаписной версии с доступом они
-  понадобятся все. Переезд на 20 обработчиках стоит день, позже — неделю.
-- **Переписать бекенд на Rust.** Rust не ускоряет numpy; половина кода —
-  русский текст протокола; пороги ещё калибруются, а порт заморозил бы их
-  в двух языках. Мотив (один exe) снят ADR 0001.
-- **Переписать бекенд на TypeScript (один язык с фронтом).** Тот же
-  аргумент о калибровке; парсер и методика остаются эталоном на Python.
-- **Тот же стек, но «облегчённый»: без Dishka, без workspace.** Второй
-  диалект правил дороже одного лишнего провайдера.
+- **Keep FastAPI.** It works, but guards, scoped DI, SSE and problem+json are
+  built into Litestar, and the multi-record version with access control will need
+  all of them. Moving 20 handlers costs a day, later it would cost a week.
+- **Rewrite the backend in Rust.** Rust does not speed up numpy; half of the code
+  is the Russian text of the protocol; the thresholds are still being calibrated,
+  and a port would freeze them in two languages. The motive (a single exe) is
+  removed by ADR 0001.
+- **Rewrite the backend in TypeScript (one language with the frontend).** The same
+  argument about calibration; the parser and the method stay the reference
+  implementation in Python.
+- **The same stack but "lightweight": no Dishka, no workspace.** A second dialect
+  of the rules costs more than one extra provider.
 
-## Последствия
+## Consequences
 
-- Обработчики async, вычисления inline: приложение однопользовательское,
-  блокировка цикла событий на десятки–сотни миллисекунд приемлема;
-  per-record lock появится вместе с реестром записей.
-- Кэш тяжёлого прохода и overrides лежат рядом с записью (`scp.parent`), а
-  не в каталоге установки: едут вместе с пациентом, каталог заведомо
-  писаемый.
-- Каждое изменение методики — строка в `docs/modules/analysis.md` и
-  CHANGELOG; рефакторинг проверяется тем же снимком ответов.
+- Handlers are async, computations are inline: the application is single-user, and
+  blocking the event loop for tens to hundreds of milliseconds is acceptable;
+  a per-record lock will appear together with the record registry.
+- The heavy-pass cache and the overrides live next to the record (`scp.parent`) and
+  not in the installation directory: they travel with the patient, and the
+  directory is writable by definition.
+- Every change to the method is a line in `docs/modules/analysis.md` and the
+  CHANGELOG; refactoring is verified by the same snapshot of responses.

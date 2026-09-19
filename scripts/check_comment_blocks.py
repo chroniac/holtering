@@ -1,8 +1,8 @@
-"""Ловит то, что ruff не ловит: баннеры и простыни комментариев.
+"""Catches what ruff does not: banner lines and walls of comments.
 
-Правила (AGENTS.md → «Код»): блок подряд идущих `#`-строк не длиннее
-MAX_BLOCK; строки-разделители вроде `# ----` или `# ====` запрещены;
-`# TODO`/`# FIXME` — только со ссылкой на задачу.
+Rules (AGENTS.md -> Code): a run of consecutive `#` lines is at most
+MAX_BLOCK long; separator lines like `# ----` or `# ====` are forbidden;
+`# TODO`/`# FIXME` only with a link to an issue.
 """
 
 import re
@@ -27,24 +27,24 @@ def scan(path: Path) -> list[str]:
             run_start = run_start or n
             run += 1
             if BANNER.match(line):
-                errors.append(f"{path}:{n}: баннер-разделитель")
+                errors.append(f"{path}:{n}: banner separator")
             if TODO.match(line):
-                errors.append(f"{path}:{n}: TODO без ссылки на задачу")
+                errors.append(f"{path}:{n}: TODO without an issue link")
         else:
             if run > MAX_BLOCK:
                 errors.append(
-                    f"{path}:{run_start}: блок комментариев на {run} строк (максимум {MAX_BLOCK})"
+                    f"{path}:{run_start}: comment block of {run} lines (maximum {MAX_BLOCK})"
                 )
             run_start, run = 0, 0
     if run > MAX_BLOCK:
         errors.append(
-            f"{path}:{run_start}: блок комментариев на {run} строк (максимум {MAX_BLOCK})"
+            f"{path}:{run_start}: comment block of {run} lines (maximum {MAX_BLOCK})"
         )
     return errors
 
 
 def tracked_python_files() -> list[Path]:
-    # Только отслеживаемые файлы: кэш uv, venv и артефакты сборки не линтуются по определению.
+    # Tracked files only: the uv cache, venv and build artefacts are never linted.
     out = subprocess.run(
         ["git", "ls-files", "-z", "--", "*.py"], check=True, capture_output=True
     ).stdout

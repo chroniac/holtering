@@ -1,8 +1,8 @@
-"""Проверка сообщений коммитов по Conventional Commits.
+"""Conventional Commits check for commit messages.
 
-Использование:
-  check_commits.py --file <путь к сообщению>     # hook commit-msg
-  check_commits.py --range <base>..<head>         # CI по диапазону
+Usage:
+  check_commits.py --file <message file>      # commit-msg hook
+  check_commits.py --range <base>..<head>     # CI over a range
 """
 
 import argparse
@@ -21,24 +21,24 @@ def check(message: str) -> list[str]:
     lines = message.rstrip("\n").split("\n")
     subject = lines[0]
     if SKIP.match(subject):
-        return [f"служебный коммит не допускается в main: {subject!r}"]
+        return [f"merge/fixup/squash commits are not allowed on main: {subject!r}"]
     errors: list[str] = []
     m = SUBJECT.match(subject)
     if not m:
-        errors.append(f"тема не по формату `тип(область): текст`: {subject!r}")
+        errors.append(f"subject does not match `type(scope): text`: {subject!r}")
     else:
         text = m.group("text")
         if text.endswith("."):
-            errors.append("тема заканчивается точкой")
+            errors.append("subject ends with a period")
         if text[0].isupper() and text[:2].isupper() is False and text.isascii():
-            errors.append("тема начинается с заглавной буквы (латиница)")
+            errors.append("subject starts with an uppercase letter")
     if len(subject) > SUBJECT_MAX:
-        errors.append(f"тема длиннее {SUBJECT_MAX} символов ({len(subject)})")
+        errors.append(f"subject longer than {SUBJECT_MAX} characters ({len(subject)})")
     if len(lines) > 1 and lines[1].strip():
-        errors.append("между темой и телом нужна пустая строка")
+        errors.append("a blank line is required between subject and body")
     for i, line in enumerate(lines[2:], start=3):
         if len(line) > BODY_LINE_MAX and not line.startswith(("http", "Refs", "See")):
-            errors.append(f"строка {i} тела длиннее {BODY_LINE_MAX} символов")
+            errors.append(f"body line {i} longer than {BODY_LINE_MAX} characters")
     return errors
 
 

@@ -1,14 +1,15 @@
-# Архитектурные решения (ADR)
+# Architecture decision records (ADR)
 
-Сквозные решения — те, что иначе будут предложены заново через полгода. У
-каждого названы отвергнутые альтернативы и цена. Формат — Nygard-lite:
-`Статус:`, `Дата:`, **Контекст**, **Решение**, **Отвергнутые альтернативы**,
-**Последствия**. Принятый ADR по существу не редактируют: отмена — новый
-ADR, у старого меняется строка `Статус:` со ссылкой.
+Cross-cutting decisions — the ones that would otherwise be proposed again in
+six months. Each one names its rejected alternatives and their price. The
+format is Nygard-lite: `Status:`, `Date:`, **Context**, **Decision**,
+**Rejected alternatives**, **Consequences**. An accepted ADR is not edited on
+substance: a reversal is a new ADR, and the old one gets a changed `Status:`
+line with a link.
 
-## Список
+## List
 
-| Номер | Название | Статус | Дата |
+| Number | Title | Status | Date |
 |---|---|---|---|
-| [0001](0001-web-app-not-desktop-exe.md) | Поставка врачам — web-приложение на нашем сервере, не desktop-exe | принято | 2026-09-19 |
-| [0002](0002-stack.md) | Стек и правила: Litestar, uv-workspace, ruff/ty, msgspec, Dishka, pydantic-settings | принято | 2026-09-19 |
+| [0001](0001-web-app-not-desktop-exe.md) | Delivery to doctors is a web application on our server, not a desktop exe | accepted | 2026-09-19 |
+| [0002](0002-stack.md) | Stack and rules: Litestar, uv workspace, ruff/ty, msgspec, Dishka, pydantic-settings | accepted | 2026-09-19 |

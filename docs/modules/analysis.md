@@ -1,169 +1,180 @@
-# analysis — проверка холтеровской разметки
+# analysis — checking the Holter labelling
 
-Пакет `holtering.analysis` берёт то, что разметил прибор (`qrs.txt`), и сырой сигнал
-(`raw.scp`), и отвечает на один вопрос: каким меткам можно верить. Ничего не
-переразмечает заново — только проверяет и объясняет.
+The `holtering.analysis` package takes what the device labelled (`qrs.txt`) and the raw
+signal (`raw.scp`), and answers a single question: which labels can be trusted. It
+re-labels nothing from scratch — it only checks and explains.
 
-Модули:
+Modules:
 
-| Модуль | Отвечает за |
+| Module | Responsible for |
 |---|---|
-| `quality.py` | качество сигнала по окнам: шум, скачки, зашкал, дрейф |
-| `beats.py` | признаки и вердикт по каждому эктопическому комплексу |
-| `templates.py` | группировка комплексов по форме QRS |
-| `rhythm.py` | ЧСС, вариабельность, паузы, серии, эпизоды |
-| `state.py` | состояние записи: тяжёлый проход, ручные правки, итоговая сводка |
-| `protocol.py` | бумажный протокол: текст, таблицы, распечатки |
+| `quality.py` | signal quality per window: noise, spikes, clipping, drift |
+| `beats.py` | features and a verdict for every ectopic complex |
+| `templates.py` | grouping complexes by QRS shape |
+| `rhythm.py` | heart rate, variability, pauses, runs, episodes |
+| `state.py` | record state: heavy pass, reviewer overrides, final summary |
+| `protocol.py` | the paper protocol: text, tables, strips |
 
-## Два прохода
+## Two passes
 
-Тяжёлый проход (`State._heavy`) читает весь сигнал: метрики качества по окнам,
-аудит каждой эктопической метки, кластеризация форм, поминутная ЧСС и ВСР. Он не
-зависит от правок врача и кэшируется в JSON рядом с записью (имя включает размер и
-mtime файла, `gain` и `invert`, поэтому подмена записи или калибровки даёт новый кэш).
+The heavy pass (`State._heavy`) reads the whole signal: quality metrics per window, an
+audit of every ectopic label, shape clustering, per-minute heart rate and HRV. It does
+not depend on the reviewer's overrides and is cached as JSON next to the record (the
+name includes the file size and mtime, `gain` and `invert`, so substituting the record
+or the calibration yields a new cache).
 
-Лёгкий проход (`State.recompute`) пересчитывается на каждую правку: слияние приборных
-и вставленных комплексов, применение ручных меток и ручных диапазонов качества,
-выделение эпизодов, счётчики, критерии.
+The light pass (`State.recompute`) is recomputed on every override: merging device and
+inserted complexes, applying manual labels and manual quality ranges, extracting
+episodes, counters, criteria.
 
-Правки врача лежат отдельным файлом `<имя>.<ид пациента>.<дата>.overrides.json` рядом с
-записью: привязка к пациенту и дате съёма нужна, чтобы переиспользованное имя файла
-(`raw.scp` следующего пациента) не унаследовало чужие метки, дневник и заключение.
+The reviewer's overrides live in a separate file
+`<name>.<patient id>.<date>.overrides.json` next to the record: binding to the patient
+and the acquisition date is needed so that a reused file name (the `raw.scp` of the
+next patient) does not inherit someone else's labels, diary and conclusion.
 
-## Качество сигнала (`quality.py`)
+## Signal quality (`quality.py`)
 
-Оценка считается только по восьми **независимым** каналам: I, II и шесть грудных.
-III, aVR, aVL, aVF — точные линейные комбинации I и II для этого прибора, и если бы
-они голосовали, один отклеившийся электрод на конечности давал бы шесть
-«подтверждающих» шумных каналов.
+The score is computed only over the eight **independent** channels: I, II and the six
+chest leads. III, aVR, aVL, aVF are exact linear combinations of I and II for this
+device, and if they had a vote, a single detached limb electrode would produce six
+"confirming" noisy channels.
 
-Окно — 2 с, чтобы затенение обходило артефакт вплотную. Все длины заданы в секундах и
-пересчитываются в отсчёты по частоте записи: 100-мс сглаживатель на 500 Гц остаётся
-100-миллисекундным, а не превращается в 26 мс.
+The window is 2 s so that shading hugs the artefact closely. All lengths are given in
+seconds and converted to samples using the record's sampling rate: a 100 ms smoother at
+500 Hz stays 100 milliseconds long instead of turning into 26 ms.
 
-На окно и канал считаются четыре величины: СКО высокочастотного остатка после
-100-мс скользящего среднего, доля скачков больше 0.5 мВ за 8 мс, доля отсчётов в
-зашкале АЦП и размах медленной составляющей (0.4 с скользящего среднего).
+Four quantities are computed per window and channel: the SD of the high-frequency
+residual after a 100 ms moving average, the fraction of spikes larger than 0.5 mV over
+8 ms, the fraction of samples in ADC clipping and the span of the slow component
+(0.4 s moving average).
 
-Из них получаются две оценки, 0 — чисто, 1 — непригодно:
+They yield two scores, 0 — clean, 1 — unusable:
 
-- `sharp` — высокочастотный шум, импульсные скачки, зашкал. Именно это ломает
-  детекцию QRS и морфологию, поэтому только эта оценка имеет право понижать вердикт
-  комплекса. Канал считается плохим при отношении к своей медиане выше 2.5, доле
-  скачков выше 0.15 или любом зашкале; отдельно берётся мягкая оценка по медиане
-  отношений.
-- `drift` — дрейф изолинии: медленный размах больше 1.5 мВ **и** больше чем вчетверо
-  от обычного дрейфа канала. Трёхкратное превышение порога на одном канале даёт 0.5,
-  четырёхкратное — 1.0; столько же даёт превышение на половине каналов. На суточной
-  записи с окном 2 с p98 отношения по худшему каналу равен 2.0, p99 — 2.7, так что
-  порог «×3» лежит за p99 и под него попадает 1.3 % окон (окна по 10 с давали 3.9 %,
-  потому что каждое помеченное окно тащило за собой 10 с чистого сигнала). Дрейф
-  портит ST и амплитуды, а не форму QRS: он затеняет окно и портит оценку качества
-  записи, но никогда не понижает вердикт комплекса.
+- `sharp` — high-frequency noise, impulse spikes, clipping. This is exactly what breaks
+  QRS detection and morphology, so only this score is allowed to downgrade a complex's
+  verdict. A channel counts as bad when the ratio to its own median is above 2.5, the
+  spike fraction is above 0.15, or there is any clipping; a soft score over the median
+  of the ratios is taken separately.
+- `drift` — baseline drift: a slow span larger than 1.5 mV **and** more than four times
+  the channel's usual drift. A threefold excess over the threshold on a single channel
+  gives 0.5, a fourfold one — 1.0; the same is given by an excess on half of the
+  channels. On a 24-hour record with a 2 s window the p98 of the ratio on the worst
+  channel equals 2.0 and p99 equals 2.7, so the "×3" threshold lies beyond p99 and
+  1.3 % of windows fall under it (10 s windows gave 3.9 %, because every flagged window
+  dragged 10 s of clean signal along with it). Drift spoils ST and amplitudes, not the
+  QRS shape: it shades the window and spoils the record quality score, but it never
+  downgrades a complex's verdict.
 
-Итоговая оценка окна — максимум из двух. Пауза считается настоящей по итоговой
-(`noise10`), а строки «Помеха» в списке эпизодов — только по `sharp10`: дрейф видно на
-шкале времени, но он не должен хоронить паузы и серии в списке разбора.
+The window's final score is the maximum of the two. A pause counts as real by the final
+score (`noise10`), while «Помеха» ("noise") rows in the episode list are driven only by
+`sharp10`: drift is visible on the time scale, but it must not bury pauses and runs in
+the review list.
 
-`gap_artifact` отвечает на вопрос, была ли внутри длинного RR потеря сигнала, а не
-тихая изолиния: оконная оценка размывает двухсекундную вспышку, поэтому сам интервал
-осматривается отдельно. Зашкал, скачок больше 5 мВ, размах больше трёх амплитуд QRS
-или высокочастотный шум выше 2.5 базовых — детектор ослеп, а не сердце встало.
+`gap_artifact` answers the question of whether there was a signal loss inside a long RR
+rather than a quiet baseline: the windowed score smears a two-second burst, so the
+interval itself is inspected separately. Clipping, a spike larger than 5 mV, a span
+larger than three QRS amplitudes or high-frequency noise above 2.5 baselines mean the
+detector went blind, not that the heart stopped.
 
-`missed_beat` ищет в средних 60 % интервала отклонение размером и формой с QRS:
-пик не меньше половины типичной амплитуды QRS с нарастанием за ~40 мс минимум на
-двух отведениях. Медленные горбы (T-волна, дрейф) проверку на крутизну не проходят.
+`missed_beat` looks in the middle 60 % of the interval for a deflection of QRS size and
+shape: a peak of at least half the typical QRS amplitude with a rise over ~40 ms on at
+least two leads. Slow humps (the T wave, drift) fail the steepness check.
 
-## Ширина QRS (`beats.py`)
+## QRS width (`beats.py`)
 
-`qrs_duration_ms` берёт размах вокруг точки максимального наклона, где сглаженный
-модуль производной держится выше 15 % от максимума. Наклон меряется за 8 мс и
-сглаживается за 24 мс независимо от частоты дискретизации, поэтому порог,
-откалиброванный на 125 Гц, означает то же самое на 500 Гц. Один провал длиной в
-отсчёт внутри серии перешагивается.
+`qrs_duration_ms` takes the span around the point of maximum slope where the smoothed
+absolute derivative stays above 15 % of the maximum. The slope is measured over 8 ms
+and smoothed over 24 ms regardless of the sampling rate, so a threshold calibrated at
+125 Hz means the same thing at 500 Hz. A single one-sample dip inside a run is stepped
+over.
 
-## Вердикты комплексов (`beats.py`)
+## Complex verdicts (`beats.py`)
 
-Каждая эктопическая метка прибора получает признаки и вердикт с причинами, чтобы врач
-видел, **почему** метка понижена:
+Every ectopic device label gets features and a verdict with reasons so that the
+reviewer can see **why** a label was downgraded:
 
-| Вердикт | Значение |
+| Verdict | Meaning |
 |---|---|
-| `double-count` | интервал сцепления меньше 300 мс — физиологически невозможно |
-| `on-wave` | амплитуда меньше 50 % от соседних N: метка стоит не на QRS |
-| `noisy` | локальный ВЧ-шум выше 2.5 базового уровня записи или окно в помехе |
-| `narrow` | метка V, но QRS не шире синусового — это не желудочковый комплекс |
-| `sinus-shape` | метка V, но комплекс в семействе морфологии, где больше 90 % синусовых |
-| `not-premature` | метка S, но комплекс не преждевременный по предыдущему синусовому ритму |
-| `uncertain` | метка V с шириной QRS 1.1–1.4 от синусовой или противоречивые признаки |
-| `likely` | прошёл все проверки |
-| `manual`, `manual-N`, `manual-X` | решение врача: эктопия, норма, артефакт |
+| `double-count` | the coupling interval is shorter than 300 ms — physiologically impossible |
+| `on-wave` | amplitude below 50 % of the neighbouring N beats: the label is not on a QRS |
+| `noisy` | local HF noise above 2.5 of the record's baseline level, or the window is in noise |
+| `narrow` | a V label, but the QRS is no wider than the sinus one — this is not a ventricular complex |
+| `sinus-shape` | a V label, but the complex is in a morphology family with more than 90 % sinus beats |
+| `not-premature` | an S label, but the complex is not premature relative to the preceding sinus rhythm |
+| `uncertain` | a V label with a QRS width of 1.1–1.4 of the sinus one, or contradictory features |
+| `likely` | passed every check |
+| `manual`, `manual-N`, `manual-X` | the reviewer's decision: ectopy, normal, artefact |
 
-В счёт эктопии идут вердикты `likely`, `uncertain` и `manual` (`KEEP`).
+The verdicts `likely`, `uncertain` and `manual` count towards ectopy (`KEEP`).
 
-Амплитуда сравнивается с почасовой медианой амплитуды синусовых комплексов, ширина —
-с медианной синусовой шириной по всей записи: обе калибровки живут в тяжёлом проходе.
+Amplitude is compared with the hourly median amplitude of sinus complexes, width — with
+the median sinus width across the whole record: both calibrations live in the heavy
+pass.
 
-## Семейства морфологии (`templates.py`, `apply_family_evidence`)
+## Morphology families (`templates.py`, `apply_family_evidence`)
 
-Каждый комплекс описывается окном ±96 мс на трёх отведениях (II и два грудных),
-отцентрированным по медиане и нормированным. Разбиение — жадное сопоставление по
-корреляции (0.90 присоединяет к существующему шаблону, иначе открывается новый, не
-больше 48), затем два прохода переназначения к ближайшему среднему шаблону.
+Every complex is described by a ±96 ms window on three leads (II and two chest leads),
+centred on the median and normalised. Partitioning is a greedy correlation match (0.90
+attaches the complex to an existing template, otherwise a new one is opened, no more
+than 48), followed by two reassignment passes to the nearest mean template.
 
-Окна берутся на сетке 125 Гц при любой частоте записи: каждая точка сетки — среднее
-`fs/125` сырых отсчётов вокруг неё (боксовая децимация, поэтому импульсная помеха
-усредняется, а не переносится в форму наложением спектров). Запись на 500 Гц
-кластеризуется в тех же 75 измерениях и за ту же цену, а порог корреляции сохраняет
-смысл.
+The windows are taken on a 125 Hz grid whatever the record's sampling rate: every grid
+point is the mean of `fs/125` raw samples around it (box decimation, so an impulse
+artefact is averaged out instead of being carried into the shape by spectral aliasing).
+A 500 Hz record is clustered in the same 75 dimensions and at the same cost, and the
+correlation threshold keeps its meaning.
 
-Вторым проходом семейство пересматривает вердикт по ширине — оно от порогов ширины не
-зависит, поэтому имеет право его перебить. Семейства меньше 10 комплексов
-статистического веса не имеют. Если в семействе больше 90 % синусовых, метка V
-становится `sinus-shape`; если меньше 20 % синусовых, `uncertain` поднимается до
-`likely`, а `narrow` — до `uncertain`. Метка S в семействе, где больше половины ЖЭС,
-опускается до `uncertain`.
+On the second pass the family revises the width-based verdict — it does not depend on
+the width thresholds, so it is entitled to override it. Families of fewer than 10
+complexes carry no statistical weight. If a family holds more than 90 % sinus beats, a
+V label becomes `sinus-shape`; if it holds fewer than 20 % sinus beats, `uncertain` is
+raised to `likely` and `narrow` — to `uncertain`. An S label in a family with more than
+half of its members being PVCs is lowered to `uncertain`.
 
-Морфологией ЖЭС считается семейство, удержавшее не меньше трёх подтверждённых V.
+A PVC morphology is a family that has retained no fewer than three confirmed V beats.
 
-## Сон по ЧСС (`rhythm.estimate_sleep`)
+## Sleep from heart rate (`rhythm.estimate_sleep`)
 
-Без дневника сон оценивается по одной частоте: 15-минутная скользящая медиана ЧСС ниже
-середины между 10-м процентилем и медианой записи, удерживающаяся не меньше 45 минут;
-разрывы до 20 минут сливаются. Запись короче двух часов валидной ЧСС оценке не
-подлежит. В интерфейсе такие отрезки помечены «ориентировочно».
+Without a diary, sleep is estimated from the rate alone: a 15-minute rolling median
+heart rate below the midpoint between the 10th percentile and the median of the record,
+sustained for no less than 45 minutes; gaps of up to 20 minutes are merged. A record
+with less than two hours of valid heart rate is not eligible for the estimate. In the
+interface such stretches are marked «ориентировочно» ("approximate").
 
-## Пять критериев чтения (`state._criteria`)
+## The five reading criteria (`state._criteria`)
 
-Набор «серьёзных нарушений ритма», по которому в Fiorina et al., JAHA 2022
-(PMC9683671) читали 1000 холтеров: пауза ≥ 2.5 с, ЖТ ≥ 4 комплексов с RR < 500 мс,
-ФП/трепетание/предсердная тахикардия ≥ 30 с, доля ЖЭС ≥ 10 %, АВ-блокада Mobitz II или
-полная. Порог уведомления врача при паузе ≥ 4 с взят из ISHNE-HRS 2017, табл. 6.
+The set of "serious rhythm disorders" used to read 1000 Holter records in Fiorina et
+al., JAHA 2022 (PMC9683671): a pause ≥ 2.5 s, VT of ≥ 4 complexes with RR < 500 ms,
+AF/flutter/atrial tachycardia ≥ 30 s, a PVC fraction ≥ 10 %, Mobitz II or complete AV
+block. The threshold for notifying the physician at a pause ≥ 4 s is taken from
+ISHNE-HRS 2017, table 6.
 
-Два критерия автоматически не решаются и помечены `met: null`: ФП даётся как скрининг
-по нерегулярности RR (окна по 30 NN, где 70 % соседних интервалов различаются больше
-чем на 12 %) — диагноз ставит врач по зубцам P; АВ-проводимость без разметки P не
-оценивается вовсе. Триплеты ЖТ показаны отдельно от критерия «≥ 4 комплексов»:
-обычное определение неустойчивой ЖТ начинается с трёх, решает врач.
+Two criteria are not decided automatically and are marked `met: null`: AF is given as a
+screen for RR irregularity (windows of 30 NN intervals where 70 % of adjacent intervals
+differ by more than 12 %) — the diagnosis is made by the reviewer from the P waves; AV
+conduction is not assessed at all without P labelling. VT triplets are shown separately
+from the "≥ 4 complexes" criterion: the usual definition of non-sustained VT starts at
+three, and the reviewer decides.
 
-## Бумажный протокол (`protocol.py`)
+## The paper protocol (`protocol.py`)
 
-Следует разделу об итоговом протоколе российских национальных рекомендаций по
-холтеровскому мониторированию (2013): сводная таблица, тренды, образцы нормальной и
-каждой атипичной ЭКГ, распечатки минимальной и максимальной ЧСС и самой длинной паузы,
-эктопия с градацией по плотности и циркадному типу, сопоставление симптомов с ритмом,
-резюме врача. Градация плотности (`density_class`) и циркадный тип оттуда же.
+Follows the final-protocol section of the Russian national guidelines on Holter
+monitoring (2013): a summary table, trends, samples of normal and of every atypical
+ECG, strips of the minimum and maximum heart rate and of the longest pause, ectopy
+graded by density and circadian type, correlation of symptoms with the rhythm, the
+reviewer's summary. The density grading (`density_class`) and the circadian type come
+from there as well.
 
-Распечатка — 7.2 с, это 180 мм листа A4 при 25 мм/с. Автоматически предлагаются:
-образец основного ритма (самые чистые 7 с в минуте с ЧСС ближе всего к суточной
-средней), минимальная и максимальная ЧСС, самая длинная пауза, до восьми
-желудочковых и четырёх наджелудочковых серий, по одному примеру на морфологию ЖЭС
-(самый уверенный одиночный комплекс, чтобы показать форму, а не уже показанную пару) и
-каждая запись дневника.
+A strip is 7.2 s, which is 180 mm of an A4 sheet at 25 mm/s. The following are proposed
+automatically: a sample of the dominant rhythm (the cleanest 7 s in the minute whose
+heart rate is closest to the 24-hour average), the minimum and maximum heart rate, the
+longest pause, up to eight ventricular and four supraventricular runs, one example per
+PVC morphology (the most confident single complex, to show the shape rather than an
+already shown pair) and every diary entry.
 
-## Почему обработчики считают синхронно
+## Why the handlers compute synchronously
 
-Приложение однопользовательское и локальное: одна запись на процесс, один врач в
-браузере. Обработчики объявлены `async`, но окна ЭКГ, пересчёт и протокол считаются
-прямо в них; блокировка цикла событий на десятки-сотни миллисекунд здесь допустима и
-проще любого пула потоков.
+The application is single-user and local: one record per process, one reviewer in the
+browser. The handlers are declared `async`, but the ECG windows, the recomputation and
+the protocol are computed right inside them; blocking the event loop for tens to
+hundreds of milliseconds is acceptable here and simpler than any thread pool.

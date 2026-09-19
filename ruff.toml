@@ -10,19 +10,19 @@ select = [
   "UP",                # pyupgrade
   "SIM",               # simplify
   "RUF",               # ruff-specific
-  "ERA",               # закомментированный код
-  "T20",               # print в коде
+  "ERA",               # commented-out code
+  "T20",               # print in code
   "PT",                # pytest style
-  "ASYNC",             # блокирующие вызовы в async
+  "ASYNC",             # blocking calls in async
   "S",                 # bandit
   "N",                 # naming
   "C4",                # comprehensions
   "RET", "PIE", "TID",
 ]
 ignore = [
-  "E501",              # длину держит форматтер
-  "S101",              # assert в тестах
-  "RUF001", "RUF002", "RUF003",  # кириллица в строках и комментариях
+  "E501",              # line length is the formatter's job
+  "S101",              # assert in tests
+  "RUF001", "RUF002", "RUF003",  # Cyrillic in strings and comments
 ]
 
 [lint.per-file-ignores]
@@ -32,8 +32,8 @@ ignore = [
 "packages/scp-holter/scp_holter/cli.py" = ["T20"]
 
 [lint.flake8-tidy-imports.banned-api]
-"os.environ".msg = "окружение читает только holtering.settings; остальной код получает Settings из DI"
-"os.getenv".msg = "окружение читает только holtering.settings; остальной код получает Settings из DI"
+"os.environ".msg = "only holtering.settings reads the environment; everything else gets Settings from DI"
+"os.getenv".msg = "only holtering.settings reads the environment; everything else gets Settings from DI"
 
 [lint.isort]
 known-first-party = ["scp_holter", "holtering", "tests"]

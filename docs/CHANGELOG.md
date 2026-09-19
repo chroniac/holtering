@@ -1,49 +1,50 @@
-# Изменения
+# Changelog
 
-Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версии —
-semver по Conventional Commits. Каждое изменение добавляет строку под
-«Unreleased»; при релизе раздел получает номер и дату.
+The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+versions are semver by Conventional Commits. Every change adds a line under
+"Unreleased"; on release the section gets a number and a date.
 
 ## Unreleased
 
-### Добавлено
-- ADR 0001 (поставка — web-приложение, не exe) и ADR 0002 (стек: Litestar, uv-workspace,
-  ruff/ty, msgspec, Dishka, pydantic-settings).
-- Правила разработки: `AGENTS.md`, `docs/`, `ruff.toml`, `.editorconfig`, pre-commit,
+### Added
+- ADR 0001 (delivery is a web application, not an exe) and ADR 0002 (stack: Litestar,
+  uv workspace, ruff/ty, msgspec, Dishka, pydantic-settings).
+- Development rules: `AGENTS.md`, `docs/`, `ruff.toml`, `.editorconfig`, pre-commit,
   `scripts/check_{comment_blocks,commits}.py`, CI GitHub Actions (`hygiene`, `python`, `web`).
-- Синтетическая запись `tests/synth.py` (12 отведений, 125 Гц, известные удары и ошибки
-  прибора) как основа тестов и смоука без реальных данных; `scripts/snapshot_api.py` —
-  снимок ответов API и сравнение двух снимков.
-- Тесты: парсер (переполнение u16 в секции 6, раскладка lead-by-lead, границы окон,
-  инверсия, cp1251-паспорт, монтаж, заголовок EDF), API (границы окон и лимиты, 404,
-  ручные метки и их сохранение, вставка удара, ручное качество, дневник, `/api/raw`),
-  анализ (NN-интервалы, серии, сон, вердикты на синтетике).
-- Документация методики `docs/modules/analysis.md` и формата `docs/modules/scp-holter.md`,
-  настроек `docs/operations/config.md`, разработки `docs/operations/dev.md`.
+- Synthetic record `tests/synth.py` (12 leads, 125 Hz, known beats and device
+  errors) as the basis for tests and smoke runs without real data; `scripts/snapshot_api.py` —
+  a snapshot of API responses and a comparison of two snapshots.
+- Tests: parser (u16 overflow in section 6, lead-by-lead layout, window boundaries,
+  inversion, cp1251 patient record, montage, EDF header), API (window boundaries and limits, 404,
+  manual labels and their persistence, beat insertion, manual quality, diary, `/api/raw`),
+  analysis (NN intervals, runs, sleep, verdicts on the synthetic record).
+- Documentation of the method in `docs/modules/analysis.md` and of the format in `docs/modules/scp-holter.md`,
+  of the settings in `docs/operations/config.md`, of development in `docs/operations/dev.md`.
 
-### Изменено
-- uv-workspace из двух пакетов: `packages/scp-holter` (парсер, CLI `scp-holter`) и
-  `packages/holtering` (анализ, API, CLI `holtering`); Python ≥ 3.14; границы держит
+### Changed
+- uv workspace of two packages: `packages/scp-holter` (parser, CLI `scp-holter`) and
+  `packages/holtering` (analysis, API, CLI `holtering`); Python ≥ 3.14; the boundaries are held by
   `import-linter` (`holtering.cli` → `holtering.api` → `holtering.analysis`).
-- HTTP-слой переписан с FastAPI на Litestar + Dishka (`holtering/api/{app,routes,views}.py`);
-  ошибки — `application/problem+json`; пути, query-параметры и тела 2xx не изменились
-  (снимок 36 ответов совпадает побайтно).
-- Анализ переведён на `msgspec.Struct`: `analysis/report.py` → `analysis/state.py`,
-  типизированные `Analysis`, `HeavyPass`, `BeatAudit`, `Episode`, `Overrides`; кэш и файл
-  правок кодируются `msgspec.json`. Формулы, пороги и порядок вычислений не менялись.
-- Конфигурация — pydantic-settings: `holtering.toml` + `HOLTERING_*` + флаги CLI, окружение
-  читает только `holtering/settings.py`. Кэш тяжёлого прохода и правки врача лежат рядом с
-  записью, а не в каталоге установки. Начало записи разрешается в слое записи
-  (настройка → штамп `DATE…` в имени → секция 1).
-- CLI: `holtering serve` и `holtering config check` вместо `python -m holtering`; structlog
-  вместо `print`.
-- Парсер: знания о формате и монтаже — в `docs/modules/scp-holter.md`, докстринги в одну
-  строку, типы под `ty`; поведение и выгрузки побайтно те же.
-- Фронтенд: Bun + Biome, `scripts/check-comments.ts`; сборка под Chrome 109 / Firefox ESR 115
-  (Windows 7/8.1 у врачей); шрифты Inter и JetBrains Mono в сборке вместо Google Fonts —
-  внешних запросов нет.
+- The HTTP layer was rewritten from FastAPI to Litestar + Dishka (`holtering/api/{app,routes,views}.py`);
+  errors are `application/problem+json`; paths, query parameters and 2xx bodies did not change
+  (a snapshot of 36 responses matches byte for byte).
+- Analysis moved to `msgspec.Struct`: `analysis/report.py` → `analysis/state.py`,
+  typed `Analysis`, `HeavyPass`, `BeatAudit`, `Episode`, `Overrides`; the cache and the
+  overrides file are encoded with `msgspec.json`. Formulas, thresholds and the order of
+  computation did not change.
+- Configuration via pydantic-settings: `holtering.toml` + `HOLTERING_*` + CLI flags, the
+  environment is read only by `holtering/settings.py`. The heavy-pass cache and reviewer
+  overrides live next to the record, not in the installation directory. The record start is
+  resolved in the record layer (setting → `DATE…` stamp in the file name → section 1).
+- CLI: `holtering serve` and `holtering config check` instead of `python -m holtering`; structlog
+  instead of `print`.
+- Parser: knowledge of the format and the montage lives in `docs/modules/scp-holter.md`, docstrings are
+  single-line, types pass `ty`; behaviour and exports are byte for byte the same.
+- Frontend: Bun + Biome, `scripts/check-comments.ts`; build targets Chrome 109 / Firefox ESR 115
+  (doctors run Windows 7/8.1); the Inter and JetBrains Mono fonts are in the bundle instead of Google Fonts —
+  there are no external requests.
 
 ## 0.1.0 — 2026-09-18
 
-- Прототип: парсер SCP-ECG LabTech, аудит меток прибора, эпизоды, семейства морфологии,
-  шумовая карта, ручные правки, печатный протокол; FastAPI + Vite/TS.
+- Prototype: LabTech SCP-ECG parser, audit of device labels, episodes, morphology families,
+  noise map, reviewer overrides, printed protocol; FastAPI + Vite/TS.

@@ -1,60 +1,62 @@
-# 0001. Поставка врачам — web-приложение на нашем сервере, не desktop-exe
+# 0001. Delivery to doctors is a web application on our server, not a desktop exe
 
-Статус: принято
-Дата: 2026-09-19
+Status: accepted
+Date: 2026-09-19
 
-## Контекст
+## Context
 
-Рабочие места врачей: Intel Core i3-5xxx (Broadwell-U, 2 ядра), HDD, 4–8 ГБ
-ОЗУ, **Windows 7 / 8.1**. Запись — 259 МБ `raw.scp` на 24 ч. Первое
-намерение владельца — собрать один `.exe` (Tauri или Electrobun) и, ради
-этого, переписать парсер и бекенд на Rust.
+Doctors' workstations: Intel Core i3-5xxx (Broadwell-U, 2 cores), HDD, 4–8 GB
+RAM, **Windows 7 / 8.1**. A record is a 259 MB `raw.scp` for 24 h. The
+owner's first intention was to build a single `.exe` (Tauri or Electrobun) and,
+for that, to rewrite the parser and the backend in Rust.
 
-Что измерено на текущем коде (i9-14900KF, SSD):
+What was measured on the current code (i9-14900KF, SSD):
 
-- парсер — `np.memmap` поверх int16-матрицы, ускорять нечего;
-- тяжёлый проход анализа (`State._heavy`) — 1.2 с на 24-часовую запись,
-  считается один раз и кэшируется;
-- тёплый импорт `numpy + fastapi + uvicorn + pydantic` — 0.8 с; venv —
-  1816 файлов, 58 МБ: с холодного HDD это десятки секунд `[предположение]`;
-- отведения лежат поотведённо с шагом 21.6 МБ, тяжёлый проход читает только
-  8 независимых каналов: на HDD каждое окно ЭКГ на 12 отведений — 12 seek'ов
-  холодного диска.
+- the parser is an `np.memmap` over an int16 matrix, there is nothing to speed up;
+- the heavy analysis pass (`State._heavy`) takes 1.2 s on a 24-hour record, it is
+  computed once and cached;
+- a warm import of `numpy + fastapi + uvicorn + pydantic` takes 0.8 s; the venv is
+  1816 files, 58 MB: from a cold HDD that is tens of seconds `[assumption]`;
+- leads are stored lead by lead with a stride of 21.6 MB, and the heavy pass reads only
+  8 independent channels: on an HDD every 12-lead ECG window costs 12 cold-disk
+  seeks.
 
-## Решение
+## Decision
 
-Врачу нужен только браузер. Бекенд (Python, как есть) работает на нашем
-сервере; врач открывает запись по HTTPS. Данные загружаются с ПК клиники
-(чанками, со сжатием), секция 1 SCP псевдонимизируется в браузере до отправки
-(теги 0/1/5/30 затираются нулями той же длины, тег 2 — псевдоним той же длины;
-4/8/25/26 остаются — протоколу нужны возраст, пол и время съёма). Печать
-протокола — серверная, headless Chromium ≥ 131 (margin boxes `@page`), врач
-скачивает PDF. Реестр записей, учётные записи, журнал доступа, срок хранения
-— отдельные ADR перед кодом.
+The doctor needs only a browser. The backend (Python, as it is) runs on our
+server; the doctor opens a record over HTTPS. Data is uploaded from the clinic's
+PC (in chunks, compressed), SCP section 1 is pseudonymised in the browser before
+sending (tags 0/1/5/30 are zeroed out with the same length, tag 2 becomes a
+pseudonym of the same length; 4/8/25/26 stay — the protocol needs age, sex and
+the acquisition time). Protocol printing is server-side, headless Chromium ≥ 131
+(`@page` margin boxes), and the doctor downloads a PDF. The record registry,
+accounts, the access log and the retention period are separate ADRs before the
+code.
 
-## Отвергнутые альтернативы
+## Rejected alternatives
 
-- **Tauri / Electrobun + Rust или TS-порт бекенда.** WebView2 не
-  поддерживается на Windows 7/8.1 с января 2023; на целевых машинах шелл не
-  запустится. Без этого ограничения Rust не давал бы выигрыша в скорости
-  анализа — горячий код уже в numpy (C), а `report.py`/`protocol.py` — текст;
-  выигрыш был бы только в размере и старте.
-- **Electron ≤ 22 (Chromium 108).** Единственный exe-путь на Win7 — 150 МБ
-  браузера без обновлений безопасности в медицинском ПО.
-- **Tauri + Python-sidecar (PyInstaller).** Тот же холодный старт с HDD,
-  плюс ложные срабатывания антивирусов на PyInstaller-сборках.
-- **Локальная установка Python-приложения на ПК врача.** Холодный старт,
-  seek'и по HDD, кэш в каталоге установки (не пишется под `Program Files`),
-  ключ кэша по mtime, который теряется при копировании.
+- **Tauri / Electrobun + Rust or a TS port of the backend.** WebView2 is not
+  supported on Windows 7/8.1 since January 2023; the shell will not start on the
+  target machines. Without that constraint Rust would not have given a win in
+  analysis speed — the hot code is already in numpy (C), and `report.py`/`protocol.py`
+  are text; the win would only have been in size and startup.
+- **Electron ≤ 22 (Chromium 108).** The only exe path on Win7 — 150 MB of
+  browser without security updates, in medical software.
+- **Tauri + a Python sidecar (PyInstaller).** The same cold start from an HDD,
+  plus antivirus false positives on PyInstaller builds.
+- **A local installation of the Python application on the doctor's PC.** Cold
+  start, HDD seeks, a cache in the installation directory (not writable under
+  `Program Files`), a cache key by mtime that is lost on copying.
 
-## Последствия
+## Consequences
 
-- Браузеры врачей заморожены на Chrome 109 / Firefox ESR 115: `vite`
-  собирает под этот target, `@page` margin boxes в CSS у них не работают —
-  отсюда серверная печать.
-- Фронтенд не ходит к третьим лицам (шрифты в сборке, не с Google Fonts).
-- Бекенд остаётся на Python; переезд на общий стек ([ADR 0002](0002-stack.md))
-  готовит его к многозаписному режиму, guard'ам доступа и DI.
-- Псевдонимизация должна быть length-preserving: указатели секции 0 —
-  абсолютные смещения; CRC секций и файла пересчитываются в браузере, на
-  сервере они становятся проверкой целостности загрузки.
+- Doctors' browsers are frozen at Chrome 109 / Firefox ESR 115: `vite` builds
+  for that target, `@page` margin boxes in CSS do not work there — hence
+  server-side printing.
+- The frontend does not call out to third parties (fonts are in the bundle, not
+  from Google Fonts).
+- The backend stays on Python; the move to the common stack ([ADR 0002](0002-stack.md))
+  prepares it for multi-record mode, access guards and DI.
+- Pseudonymisation must be length-preserving: the section 0 pointers are
+  absolute offsets; the section and file CRCs are recomputed in the browser, and
+  on the server they become an upload integrity check.

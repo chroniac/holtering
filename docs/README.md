@@ -1,35 +1,37 @@
-# holtering — документация
+# holtering — documentation
 
-Проверка холтеровской разметки: что прибор (LabTech EC-12H, CardioSpy)
-разметил неверно, до того как запись прочитает кардиолог. На входе —
-экспорт `raw.scp` (SCP-ECG, 12 отведений, 125 Гц, до 24 ч) и `qrs.txt`
-(метки прибора); на выходе — аудит каждой эктопической метки с вердиктом и
-причинами, эпизоды для триажа, шумовая карта, ручные правки врача и
-печатный протокол.
+Verification of Holter annotation: what the device (LabTech EC-12H, CardioSpy)
+labelled incorrectly, before a cardiologist reads the record. The input is a
+`raw.scp` export (SCP-ECG, 12 leads, 125 Hz, up to 24 h) and `qrs.txt`
+(device labels); the output is an audit of every ectopic label with a verdict
+and reasons, episodes for triage, a noise map, reviewer overrides and a
+printed protocol.
 
-## Как читать
+## How to read this
 
-| Документ | О чём | Кому |
+| Document | About | For whom |
 |---|---|---|
-| [adr/](adr/README.md) | решения с отвергнутыми альтернативами: поставка, стек | тому, кто предложит «а давайте иначе» |
-| [modules/scp-holter](modules/scp-holter.md) | формат файла, отклонения вендора от SCP-ECG, монтаж и полярность, экспорт | разработчику парсера |
-| [modules/analysis](modules/analysis.md) | методика: качество сигнала, аудит меток, семейства морфологии, эпизоды, критерии чтения | разработчику, кардиологу-рецензенту |
-| [operations/dev](operations/dev.md) | локальная разработка, проверки, устройство репозитория | разработчику |
-| [operations/config](operations/config.md) | настройки `holtering.toml`, переменные `HOLTERING_*`, флаги CLI | оператору |
-| [CHANGELOG](CHANGELOG.md) | изменения по версиям | всем |
+| [adr/](adr/README.md) | decisions with their rejected alternatives: delivery, stack | anyone about to propose "let's do it differently" |
+| [modules/scp-holter](modules/scp-holter.md) | file format, vendor deviations from SCP-ECG, montage and polarity, export | parser developer |
+| [modules/analysis](modules/analysis.md) | method: signal quality, label audit, morphology families, episodes, reading criteria | developer, reviewing cardiologist |
+| [operations/dev](operations/dev.md) | local development, checks, repository layout | developer |
+| [operations/config](operations/config.md) | `holtering.toml` settings, `HOLTERING_*` variables, CLI flags | operator |
+| [CHANGELOG](CHANGELOG.md) | changes by version | everyone |
 
-## Что дальше
+## What comes next
 
-Поставка врачам — web-приложение на нашем сервере ([ADR 0001](adr/0001-web-app-not-desktop-exe.md)).
-До неё в коде нет: реестра записей (сейчас один процесс — одна запись),
-загрузки файлов с псевдонимизацией секции 1 на клиенте, учётных записей,
-серверной печати в PDF. Каждый из этих шагов — свой ADR перед кодом.
+Delivery to doctors is a web application on our server ([ADR 0001](adr/0001-web-app-not-desktop-exe.md)).
+Until then the code has no record registry (currently one process is one
+record), no file upload with client-side pseudonymisation of section 1, no
+accounts, no server-side PDF printing. Each of these steps gets its own ADR
+before the code.
 
-## Конвенции
+## Conventions
 
-- ADR — Nygard-lite (Статус, Дата, Контекст, Решение, Отвергнутые
-  альтернативы, Последствия). Принятый ADR не редактируют по существу:
-  отмена — новый ADR.
-- Факты о приборе и формате даны со ссылкой на измерение (запись, значение,
-  rmse). Утверждение без измерения помечено `[предположение]`.
-- Язык документов — русский; идентификаторы кода — как в коде.
+- ADRs are Nygard-lite (Status, Date, Context, Decision, Rejected
+  alternatives, Consequences). An accepted ADR is not edited on substance:
+  a reversal is a new ADR.
+- Facts about the device and the format are given with a reference to a
+  measurement (record, value, rmse). A statement without a measurement is
+  marked `[assumption]`.
+- Documentation language is English; code identifiers are as in the code.

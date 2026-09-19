@@ -1,7 +1,7 @@
 [project]
 name = "holtering-workspace"
 version = "0.0.0"
-description = "Рабочее пространство holtering: парсер SCP-ECG LabTech и проверка холтеровской разметки"
+description = "holtering workspace: LabTech SCP-ECG parser and Holter annotation QC"
 requires-python = ">=3.14"
 dependencies = [
   "scp-holter",
@@ -42,13 +42,13 @@ root = ["packages/scp-holter", "packages/holtering", "."]
 root_packages = ["scp_holter", "holtering"]
 
 [[tool.importlinter.contracts]]
-name = "парсер не знает о приложении"
+name = "the parser does not know about the application"
 type = "forbidden"
 source_modules = ["scp_holter"]
 forbidden_modules = ["holtering"]
 
 [[tool.importlinter.contracts]]
-name = "слои приложения: cli → api → анализ"
+name = "application layers: cli → api → analysis"
 type = "layers"
 layers = [
   "holtering.cli",
