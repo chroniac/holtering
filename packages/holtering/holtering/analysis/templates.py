@@ -1,45 +1,58 @@
-"""Morphology templates: group every beat by QRS shape, the way CardioSpy's
-"Шаблоны" grid does, so a reviewer can relabel a whole family at once.
-
-Each beat is a +-96 ms window on three leads (II + two chest channels),
-median-centred and L2-normalised. Assignment is greedy correlation matching
-(>= CORR_MIN joins an existing template, otherwise a new one is opened), then
-one refinement pass reassigns everything to the nearest template mean.
-
-Windows are taken on a 125 Hz grid whatever the record's sample rate: each grid
-point is the mean of the fs/125 raw samples around it (box decimation, so pacing
-spikes and impulsive artefact are averaged rather than aliased into the shape).
-A 500 Hz recording therefore clusters in the same 75 dimensions at the same
-cost, and the correlation threshold tuned at 125 Hz keeps its meaning.
-"""
+"""Шаблоны морфологии: группировка комплексов по форме QRS — docs/modules/analysis.md."""
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import numpy as np
+from msgspec import Struct
+
+ReadLead = Callable[[int, int, int], np.ndarray]
 
 LEADS_T = [1, 10, 7]
 GRID_HZ = 125
-HALF = 12                    # grid samples each side -> 25 points = 200 ms
+HALF = 12  # отсчётов сетки в каждую сторону -> 25 точек = 200 мс
 CORR_MIN = 0.90
 MAX_TEMPLATES = 48
 CHUNK = 4096
 
 
+class TemplateWave(Struct):
+    fs: int
+    half_ms: int
+    leads: list[list[float]]
+
+
+class Template(Struct):
+    id: int
+    count: int
+    labels: dict[str, int]
+    verdicts: dict[str, int]
+    verdicts_by_label: dict[str, dict[str, int]]
+    wave: TemplateWave
+    first: int
+    sample: list[int]
+
+
 def grid_step(fs: int) -> int:
-    return max(1, int(round(fs / GRID_HZ)))
+    return max(1, round(fs / GRID_HZ))
 
 
-def beat_windows(read, n_samples: int, fs: int, mv: float, t_ms: np.ndarray):
-    """(n_beats, 3*(2*HALF+1)) float32 raw windows in mV; invalid edge beats -> zeros.
-    `read(ch, a, b)` returns raw int16; each lead is read once, sequentially."""
+def beat_windows(
+    read: ReadLead, n_samples: int, fs: int, mv: float, t_ms: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Окна комплексов в мВ, (n_beats, 3*(2*HALF+1)) float32; краевые комплексы — нули."""
     step = grid_step(fs)
     idx = np.round(t_ms * fs / 1000).astype(np.int64)
-    # centred box of width `step` around each grid point; an even width takes step+1
-    # samples with half weight at both ends so the centre never shifts by half a sample
+    # Чётная ширина берёт step+1 отсчёт с половинным весом по краям, чтобы центр окна
+    # не сместился на полотсчёта.
     if step % 2:
-        sub = np.arange(-(step // 2), step // 2 + 1); wts = np.full(step, 1.0 / step, np.float32)
+        sub = np.arange(-(step // 2), step // 2 + 1)
+        wts = np.full(step, 1.0 / step, np.float32)
     else:
-        sub = np.arange(-(step // 2), step // 2 + 1); wts = np.full(step + 1, 1.0 / step, np.float32); wts[[0, -1]] = 0.5 / step
+        sub = np.arange(-(step // 2), step // 2 + 1)
+        wts = np.full(step + 1, 1.0 / step, np.float32)
+        wts[[0, -1]] = 0.5 / step
     lo, hi = HALF * step - sub[0], HALF * step + sub[-1] + 1
     valid = (idx >= lo) & (idx < n_samples - hi)
     offs = np.arange(-HALF, HALF + 1) * step
@@ -61,42 +74,47 @@ def _normalise(w: np.ndarray) -> np.ndarray:
 
 
 def cluster(w: np.ndarray, valid: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Return (template_id per beat, template unit vectors). Invalid beats get -1."""
+    """Номер шаблона у каждого комплекса и единичные векторы шаблонов; краевые — -1."""
     x = _normalise(w)
-    tm = np.empty((MAX_TEMPLATES, x.shape[1]), x.dtype)   # templates live here; nt of them are open
+    tm = np.empty((MAX_TEMPLATES, x.shape[1]), x.dtype)
     nt = 0
     assign = np.full(len(x), -1, np.int32)
     ids = np.where(valid)[0]
     for c0 in range(0, len(ids), CHUNK):
-        sel = ids[c0:c0 + CHUNK]
+        sel = ids[c0 : c0 + CHUNK]
         if nt:
             corr = x[sel] @ tm[:nt].T
-            best = corr.argmax(axis=1); ok = corr[np.arange(len(sel)), best] >= CORR_MIN
+            best = corr.argmax(axis=1)
+            ok = corr[np.arange(len(sel)), best] >= CORR_MIN
             assign[sel[ok]] = best[ok]
             rest = sel[~ok]
         else:
             rest = sel
-        for pos, k in enumerate(rest):                   # open new templates one by one
-            if nt >= MAX_TEMPLATES:                      # set is frozen: the rest is one batched argmax
+        for pos, k in enumerate(rest):
+            if nt >= MAX_TEMPLATES:
+                # Набор заморожен: остаток раскладывается одним пакетным argmax.
                 tail = rest[pos:]
                 assign[tail] = (x[tail] @ tm[:nt].T).argmax(axis=1)
                 break
             if nt:
-                c = tm[:nt] @ x[k]; j = int(c.argmax())
+                c = tm[:nt] @ x[k]
+                j = int(c.argmax())
                 if c[j] >= CORR_MIN:
-                    assign[k] = j; continue
-            tm[nt] = x[k]; assign[k] = nt; nt += 1
-    # refinement: template = mean of members, reassign
+                    assign[k] = j
+                    continue
+            tm[nt] = x[k]
+            assign[k] = nt
+            nt += 1
     tm = tm[:nt].copy()
     for _ in range(2):
         for j in range(nt):
             m = assign == j
             if m.any():
-                v = x[m].mean(axis=0); tm[j] = v / (np.linalg.norm(v) + 1e-6)
+                v = x[m].mean(axis=0)
+                tm[j] = v / (np.linalg.norm(v) + 1e-6)
         for c0 in range(0, len(ids), CHUNK):
-            sel = ids[c0:c0 + CHUNK]
+            sel = ids[c0 : c0 + CHUNK]
             assign[sel] = (x[sel] @ tm.T).argmax(axis=1)
-    # renumber by size, drop empties
     counts = np.bincount(assign[assign >= 0], minlength=nt)
     order = [j for j in np.argsort(-counts) if counts[j] > 0]
     remap = {old: new for new, old in enumerate(order)}
@@ -104,24 +122,41 @@ def cluster(w: np.ndarray, valid: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return out, tm[order]
 
 
-def summarise(w: np.ndarray, assign: np.ndarray, labels: np.ndarray, verdicts: dict[int, str], fs: int) -> list[dict]:
+def summarise(
+    w: np.ndarray, assign: np.ndarray, labels: np.ndarray, verdicts: dict[int, str], fs: int
+) -> list[Template]:
     n_t = int(assign.max()) + 1 if len(assign) else 0
     out = []
     for j in range(n_t):
         m = np.where(assign == j)[0]
         mean = w[m].reshape(len(m), len(LEADS_T), -1).mean(axis=0)
         mean = mean - np.median(mean, axis=1, keepdims=True)
-        lab = {k: int(v) for k, v in zip(*np.unique(labels[m], return_counts=True))}
+        lab = {
+            str(k): int(v) for k, v in zip(*np.unique(labels[m], return_counts=True), strict=True)
+        }
         vd: dict[str, int] = {}
         by_label: dict[str, dict[str, int]] = {}
         for k in m:
             v = verdicts.get(int(k), "N")
             vd[v] = vd.get(v, 0) + 1
-            l = str(labels[k])
-            if l != "N":
-                by_label.setdefault(l, {})[v] = by_label.setdefault(l, {}).get(v, 0) + 1
-        out.append({"id": j, "count": int(len(m)), "labels": lab, "verdicts": vd, "verdicts_by_label": by_label,
-                    "wave": {"fs": fs // grid_step(fs), "half_ms": HALF * 1000 * grid_step(fs) // fs,
-                             "leads": [np.round(row, 3).tolist() for row in mean]},
-                    "first": int(m[0]), "sample": [int(k) for k in m[:: max(1, len(m) // 40)][:40]]})
+            label = str(labels[k])
+            if label != "N":
+                by_label.setdefault(label, {})[v] = by_label.setdefault(label, {}).get(v, 0) + 1
+        wave = TemplateWave(
+            fs=fs // grid_step(fs),
+            half_ms=HALF * 1000 * grid_step(fs) // fs,
+            leads=[np.round(row, 3).tolist() for row in mean],
+        )
+        out.append(
+            Template(
+                id=j,
+                count=len(m),
+                labels=lab,
+                verdicts=vd,
+                verdicts_by_label=by_label,
+                wave=wave,
+                first=int(m[0]),
+                sample=[int(k) for k in m[:: max(1, len(m) // 40)][:40]],
+            )
+        )
     return out

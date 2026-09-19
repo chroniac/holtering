@@ -1,83 +1,75 @@
-"""Signal-quality index per window, on the 8 INDEPENDENT channels only.
-
-III/aVR/aVL/aVF are exact linear combinations of I and II for this device, so
-they must not vote: a single bad limb electrode would otherwise produce six
-"confirming" noisy channels. Independent set = I, II and the six chest channels.
-"""
+"""Качество сигнала по окнам на восьми независимых каналах — docs/modules/analysis.md."""
 
 from __future__ import annotations
+
+import os
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 
 import numpy as np
 
 INDEPENDENT = [0, 1, 6, 7, 8, 9, 10, 11]
-WINDOW_S = 2                    # quality is scored per 2 s so shading hugs the artefact
-SMOOTH_S = 0.104                # ~100 ms moving average (13 samples at 125 Hz, where it was tuned)
-STEP_S = 0.008                  # jump measured over 8 ms (one sample at 125 Hz)...
-STEP_MV = 0.5                   # ...of 0.5 mV never happens in clean ECG
-RAIL = 32000                    # ADC saturation
-WANDER_S = 0.4                  # 0.4 s moving average: keeps baseline drift, drops QRS/T
-WANDER_MIN_MV = 1.5             # absolute floor for "drift" (respiration stays well below)
-WANDER_RATIO = 4.0              # ...and it must also be 4x the channel's typical drift
+WINDOW_S = 2  # окно 2 с: затенение обходит артефакт вплотную
+SMOOTH_S = 0.104  # ~100 мс скользящего среднего (13 отсчётов на 125 Гц, где он настроен)
+STEP_S = 0.008  # скачок меряется за 8 мс (один отсчёт на 125 Гц)...
+STEP_MV = 0.5  # ...и 0.5 мВ в чистой ЭКГ не бывает
+RAIL = 32000  # зашкал АЦП
+WANDER_S = 0.4  # 0.4 с скользящего среднего: оставляет дрейф, убирает QRS/T
+WANDER_MIN_MV = 1.5  # абсолютный пол «дрейфа» (дыхание держится заметно ниже)
+WANDER_RATIO = 4.0  # ...и он же должен быть вчетверо больше обычного дрейфа канала
+
+ReadLead = Callable[[int, int, int], np.ndarray]
 
 
 def samples(seconds: float, fs: int, at_least: int = 1) -> int:
-    """Window lengths are defined in seconds and derived per record: a 500 Hz recording
-    must get the same 100 ms smoother, not 13 samples of 26 ms."""
-    return max(at_least, int(round(seconds * fs)))
+    """Длины окон заданы в секундах: на 500 Гц нужен тот же 100-мс сглаживатель, а не 13 отсчётов."""
+    return max(at_least, round(seconds * fs))
 
 
-def running_sum(x: np.ndarray, dtype=np.float64) -> np.ndarray:
-    """c[i] = sum(x[:i]) along the last axis, length n+1. int64 on raw int16 is exact."""
+def running_sum(x: np.ndarray, dtype: type = np.float64) -> np.ndarray:
+    """c[i] = sum(x[:i]) по последней оси, длина n+1; int64 на сырых int16 точен."""
     n = x.shape[-1]
-    c = np.zeros(x.shape[:-1] + (n + 1,), dtype)
+    c = np.zeros((*x.shape[:-1], n + 1), dtype)
     np.cumsum(x, axis=-1, dtype=dtype, out=c[..., 1:])
     return c
 
 
 def box_from_sum(c: np.ndarray, k: int, scale: float = 1.0) -> np.ndarray:
-    """Moving average of width k from a running sum, with exactly the alignment and
-    zero-padded edges of np.convolve(x, ones(k)/k, mode="same"): O(n), one slice
-    difference for the interior and two short ones for the edges. `scale` folds a
-    unit conversion (mV per LSB) into the final multiply."""
+    """Скользящее среднее ширины k из бегущей суммы, выравнивание как у np.convolve(mode="same")."""
     n = c.shape[-1] - 1
-    hi, lo = (k - 1) // 2 + 1, k // 2                   # out[i] = c[min(i+hi, n)] - c[max(i-lo, 0)]
-    out = np.empty(c.shape[:-1] + (n,), np.float64)
-    if n <= k:                                          # window covers everything: clip both ends
+    hi, lo = (k - 1) // 2 + 1, k // 2  # out[i] = c[min(i+hi, n)] - c[max(i-lo, 0)]
+    out = np.empty((*c.shape[:-1], n), np.float64)
+    if n <= k:  # окно накрывает всё: обрезаются оба конца
         i = np.arange(n)
         out[...] = c[..., np.minimum(i + hi, n)] - c[..., np.maximum(i - lo, 0)]
     else:
-        out[..., lo:n - hi + 1] = c[..., lo + hi:n + 1] - c[..., 0:n - hi + 1 - lo]
-        out[..., :lo] = c[..., hi:hi + lo] - c[..., :1]
-        out[..., n - hi + 1:] = c[..., n:] - c[..., n - hi + 1 - lo:n - lo]
+        out[..., lo : n - hi + 1] = c[..., lo + hi : n + 1] - c[..., 0 : n - hi + 1 - lo]
+        out[..., :lo] = c[..., hi : hi + lo] - c[..., :1]
+        out[..., n - hi + 1 :] = c[..., n:] - c[..., n - hi + 1 - lo : n - lo]
     out *= scale / k
     return out
 
 
 def box_same(x: np.ndarray, k: int) -> np.ndarray:
-    """np.convolve(x, ones(k)/k, mode="same") in O(n) instead of O(n*k); float64
-    accumulation keeps it within 1e-12 of the direct convolution."""
+    """np.convolve(x, ones(k)/k, mode="same") за O(n) вместо O(n*k)."""
     return box_from_sum(running_sum(x), k)
 
 
 def hf_residual(x: np.ndarray, fs: int) -> np.ndarray:
-    """High-frequency residual after a ~100 ms moving average, along the last axis."""
+    """Высокочастотный остаток после ~100 мс скользящего среднего, по последней оси."""
     return x - box_same(x, samples(SMOOTH_S, fs))
 
 
 def baseline(x: np.ndarray, fs: int) -> np.ndarray:
-    """Slow component (0.4 s moving average) along the last axis."""
+    """Медленная составляющая (0.4 с скользящего среднего) по последней оси."""
     return box_same(x, samples(WANDER_S, fs))
 
 
-def window_metrics(read, n_samples: int, fs: int, mv_per_lsb: float, window_s: int = WINDOW_S):
-    """Per window and per independent channel: HF RMS (mV), step fraction, rail hits,
-    baseline wander (peak-to-peak of the slow component, mV).
-
-    `read(ch, a, b)` returns raw int16 samples; it is called one channel and one hour at
-    a time so the working set stays at a few tens of MB whatever the record length or
-    sample rate (a memmap would pin every page it touched into RSS)."""
-    from concurrent.futures import ThreadPoolExecutor
-
+def window_metrics(
+    read: ReadLead, n_samples: int, fs: int, mv_per_lsb: float, window_s: int = WINDOW_S
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """По окну и независимому каналу: ВЧ-СКО (мВ), доля скачков, зашкал, дрейф (мВ)."""
     win = fs * window_s
     n_win = n_samples // win
     n_ch = len(INDEPENDENT)
@@ -85,17 +77,18 @@ def window_metrics(read, n_samples: int, fs: int, mv_per_lsb: float, window_s: i
     steps = np.zeros((n_win, n_ch), np.float32)
     rails = np.zeros((n_win, n_ch), np.float32)
     wander = np.zeros((n_win, n_ch), np.float32)
-    per_chunk = max(1, 450_000 // win)                   # ~450k samples per channel-chunk (1 h at 125 Hz):
-    step_lsb = STEP_MV / abs(mv_per_lsb)                  # temporaries stay ~20 MB per worker at any sample rate
+    # ~450k отсчётов на канал-кусок (1 ч на 125 Гц): временные массивы ~20 МБ на поток
+    # при любой частоте дискретизации и длине записи.
+    per_chunk = max(1, 450_000 // win)
+    step_lsb = STEP_MV / abs(mv_per_lsb)
     k_hf, k_slow, lag = samples(SMOOTH_S, fs), samples(WANDER_S, fs), samples(STEP_S, fs)
 
-    def one(ci: int, ch: int, a: int, b: int, w0: int, w1: int) -> None:
+    def one(a: int, b: int, w0: int, w1: int, ci: int) -> None:
         k = w1 - w0
-        raw = read(ch, a, b)
+        raw = read(INDEPENDENT[ci], a, b)
         rr = raw.reshape(k, win)
-        # one exact integer running sum feeds both moving averages
-        c = running_sum(raw, np.int64)
-        x = raw * mv_per_lsb                              # float64, no float32 rounding
+        c = running_sum(raw, np.int64)  # одна точная целочисленная сумма на оба средних
+        x = raw * mv_per_lsb  # float64, без округления до float32
         res = (x - box_from_sum(c, k_hf, mv_per_lsb)).reshape(k, win)
         hf[w0:w1, ci] = res.std(axis=1)
         r32 = rr.astype(np.int32)
@@ -104,32 +97,20 @@ def window_metrics(read, n_samples: int, fs: int, mv_per_lsb: float, window_s: i
         slow = box_from_sum(c, k_slow, mv_per_lsb).reshape(k, win)
         wander[w0:w1, ci] = slow.max(axis=1) - slow.min(axis=1)
 
-    # numpy releases the GIL inside cumsum / reductions, so channels run in parallel;
-    # each worker holds one channel-hour (~20 MB of temporaries)
-    with ThreadPoolExecutor(max_workers=min(n_ch, max(2, (__import__("os").cpu_count() or 2)))) as pool:
+    # numpy отпускает GIL внутри cumsum и редукций, поэтому каналы считаются параллельно.
+    with ThreadPoolExecutor(max_workers=min(n_ch, max(2, os.cpu_count() or 2))) as pool:
         for w0 in range(0, n_win, per_chunk):
             w1 = min(n_win, w0 + per_chunk)
-            a, b = w0 * win, w1 * win
-            list(pool.map(lambda ci: one(ci, INDEPENDENT[ci], a, b, w0, w1), range(n_ch)))
+            list(pool.map(partial(one, w0 * win, w1 * win, w0, w1), range(n_ch)))
     return hf, steps, rails, wander
 
 
-def noise_score(hf: np.ndarray, steps: np.ndarray, rails: np.ndarray, wander: np.ndarray):
-    """Two scores per window, 0 = clean, 1 = unusable; baselines are per-channel medians.
-
-    `sharp`  : HF noise, impulsive steps, rail hits. This is what breaks QRS detection and
-               morphology, so it is the only score that may demote a beat verdict.
-    `drift`  : baseline wander (slow swing > WANDER_MIN_MV and > WANDER_RATIO x the
-               channel's usual drift; 3x the threshold on any single channel -> 0.5,
-               4x -> 1.0, or >= half the channels over threshold). Re-checked at the
-               2 s window on a 24 h record: worst-channel ratio p98 = 2.0, p99 = 2.7,
-               so 3x sits past p99 and 1.3 % of windows score >= 0.5 (10 s windows gave
-               3.9 %, because each flagged window then carried 10 s of clean signal).
-               Drift corrupts ST and amplitude readings, not QRS shape: it
-               shades the window and counts against record quality, never against a beat.
-    Returns (combined, sharp, hf_base)."""
+def noise_score(
+    hf: np.ndarray, steps: np.ndarray, rails: np.ndarray, wander: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Две оценки на окно, 0 — чисто, 1 — непригодно; пороги — docs/modules/analysis.md."""
     base = np.median(hf, axis=0) + 1e-6
-    ratio = hf / base                                      # 1 = typical, 3+ = bad
+    ratio = hf / base  # 1 — обычное, 3 и больше — плохо
     ch_bad = ((ratio > 2.5) | (steps > 0.15) | (rails > 0)).astype(np.float32)
     soft = np.clip((np.median(ratio, axis=1) - 1.0) / 2.0, 0, 1)
     sharp = np.maximum(ch_bad.mean(axis=1), soft).astype(np.float32)
@@ -141,17 +122,19 @@ def noise_score(hf: np.ndarray, steps: np.ndarray, rails: np.ndarray, wander: np
     return np.maximum(sharp, drift), sharp, base
 
 
-def gap_artifact(mm: np.memmap, fs: int, mv_per_lsb: float, t0_ms: int, t1_ms: int,
-                 qrs_amp_mv: float, hf_base_mv: float) -> tuple[bool, str]:
-    """Is an RR gap signal loss / impulsive artifact rather than a quiet isoelectric pause?
-
-    A real pause is a flat, quiet line. Window-level SQI dilutes a 2-s burst inside a
-    10-s window, so the gap itself is inspected on the independent channels: rail hits,
-    single-sample jumps > 5 mV, range > 3x the local QRS amplitude, or HF residual
-    > 2.5x the record baseline all mean the detector went blind, not the heart.
-    """
-    margin = samples(0.064, fs)                            # keep clear of the QRS on both sides
-    a = int(t0_ms * fs / 1000) + margin; b = int(t1_ms * fs / 1000) - margin
+def gap_artifact(
+    mm: np.memmap,
+    fs: int,
+    mv_per_lsb: float,
+    t0_ms: int,
+    t1_ms: int,
+    qrs_amp_mv: float,
+    hf_base_mv: float,
+) -> tuple[bool, str]:
+    """Потеря сигнала внутри RR-интервала, а не тихая изолиния паузы?"""
+    margin = samples(0.064, fs)  # держаться подальше от QRS с обеих сторон
+    a = int(t0_ms * fs / 1000) + margin
+    b = int(t1_ms * fs / 1000) - margin
     if b - a < fs // 4:
         return False, "интервал короче 250 мс"
     raw = np.asarray(mm[INDEPENDENT, a:b])
@@ -164,7 +147,7 @@ def gap_artifact(mm: np.memmap, fs: int, mv_per_lsb: float, t0_ms: int, t1_ms: i
     if rails > 0:
         return True, f"зашкал АЦП, {rails:.0%} отсчётов"
     if max_step > 5.0:
-        return True, f"скачок {max_step:.1f} мВ за {int(round(1000 * lag / fs))} мс"
+        return True, f"скачок {max_step:.1f} мВ за {round(1000 * lag / fs)} мс"
     if rng > 3.0 * qrs_amp_mv:
         return True, f"размах {rng:.1f} мВ, ×{rng / qrs_amp_mv:.1f} к QRS"
     if hf > 2.5 * hf_base_mv:
@@ -172,33 +155,38 @@ def gap_artifact(mm: np.memmap, fs: int, mv_per_lsb: float, t0_ms: int, t1_ms: i
     return False, f"изолиния: размах {rng:.2f} мВ, шум ×{hf / hf_base_mv:.1f}"
 
 
-def local_noise(mm: np.memmap, fs: int, mv_per_lsb: float, i: int, half_s: float = 0.5, ch: int = 1) -> float:
-    a = max(0, i - int(half_s * fs)); b = min(mm.shape[1], i + int(half_s * fs))
+def local_noise(
+    mm: np.memmap, fs: int, mv_per_lsb: float, i: int, half_s: float = 0.5, ch: int = 1
+) -> float:
+    a = max(0, i - int(half_s * fs))
+    b = min(mm.shape[1], i + int(half_s * fs))
     x = np.asarray(mm[ch, a:b]).astype(np.float32) * mv_per_lsb
     return float(hf_residual(x, fs).std())
 
 
-def missed_beat(mm: np.memmap, fs: int, mv_per_lsb: float, t0_ms: int, t1_ms: int,
-                qrs_amp_mv: float) -> tuple[bool, str]:
-    """Is there a QRS-sized, QRS-shaped deflection in the middle 60 % of an RR gap?
-
-    Looks at lead II and two chest channels; requires a sharp peak (>= 50 % of the
-    typical QRS amplitude, rising within ~40 ms) on at least two of them at the same
-    place. Slow humps (T waves, drift) fail the sharpness test."""
-    a = int(t0_ms * fs / 1000); b = int(t1_ms * fs / 1000)
-    lo = a + int((b - a) * 0.2); hi = a + int((b - a) * 0.8)
+def missed_beat(
+    mm: np.memmap, fs: int, mv_per_lsb: float, t0_ms: int, t1_ms: int, qrs_amp_mv: float
+) -> tuple[bool, str]:
+    """Есть ли в средних 60 % RR-интервала отклонение размером и формой с QRS?"""
+    a = int(t0_ms * fs / 1000)
+    b = int(t1_ms * fs / 1000)
+    lo = a + int((b - a) * 0.2)
+    hi = a + int((b - a) * 0.8)
     if hi - lo < fs // 5:
         return False, ""
-    hits = 0; where = None
+    hits = 0
+    where = None
     lag, reach = samples(STEP_S, fs), samples(0.04, fs)
     for ch in (1, 7, 8):
         x = np.asarray(mm[ch, lo:hi]).astype(np.float32) * mv_per_lsb
         x = x - np.median(x)
-        d = np.abs(x[lag:] - x[:-lag])                      # slew over 8 ms, whatever the sample rate
+        d = np.abs(x[lag:] - x[:-lag])  # крутизна за 8 мс при любой частоте дискретизации
         peak = int(np.argmax(np.abs(x)))
-        sharp = d[max(0, peak - reach):peak + reach].max() if len(d) else 0.0
+        sharp = d[max(0, peak - reach) : peak + reach].max() if len(d) else 0.0
         if abs(x[peak]) >= 0.5 * qrs_amp_mv and sharp >= 0.25 * qrs_amp_mv:
-            hits += 1; where = lo + peak
+            hits += 1
+            where = lo + peak
     if hits >= 2 and where is not None:
-        return True, f"комплекс без метки на {hits} отведениях, через {int(where * 1000 / fs) - t0_ms} мс после предыдущего"
+        delay = int(where * 1000 / fs) - t0_ms
+        return True, f"комплекс без метки на {hits} отведениях, через {delay} мс после предыдущего"
     return False, ""

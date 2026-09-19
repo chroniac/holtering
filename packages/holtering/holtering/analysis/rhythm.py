@@ -1,35 +1,39 @@
-"""Heart-rate series, HRV, pauses and episode extraction from the audited labels."""
+"""ЧСС, вариабельность, паузы и эпизоды по проверенным меткам."""
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
-from typing import Callable
+from collections.abc import Callable
 
 import numpy as np
+from msgspec import Struct, field
 
 from .beats import VERDICT_RU, BeatAudit
 
-KEEP = {"likely", "uncertain", "manual"}   # audited labels that still count as ectopy
+KEEP = {"likely", "uncertain", "manual"}  # вердикты, при которых метка всё ещё считается эктопией
 
 
-@dataclass
-class Episode:
+class Episode(Struct):
     id: int
-    kind: str                # pause | v-run | s-run | noise | qt
+    kind: str  # pause | v-run | s-run | missed | noise
     t_ms: int
     dur_ms: int
     title: str
-    verdict: str             # artifact | review | likely
+    verdict: str  # artifact | review | likely
     confidence: float
     reasons: list[str] = field(default_factory=list)
     beats: list[int] = field(default_factory=list)
 
-    def to_dict(self) -> dict:
-        return asdict(self)
+
+class Hrv(Struct):
+    sdnn: float
+    rmssd: float
+    pnn50: float
+    mean_rr: int
+    n: int
 
 
 def plural(n: int, one: str, few: str, many: str) -> str:
-    """Russian noun agreement: 1 метка, 3 метки, 5 меток (11-14 -> many)."""
+    """Согласование числительных: 1 метка, 3 метки, 5 меток (11–14 — many)."""
     if n % 10 == 1 and n % 100 != 11:
         return one
     if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
@@ -37,14 +41,15 @@ def plural(n: int, one: str, few: str, many: str) -> str:
     return many
 
 
-def nn_intervals(t_ms: np.ndarray, labels: np.ndarray):
+def nn_intervals(t_ms: np.ndarray, labels: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     rr = np.diff(t_ms)
     ok = (labels[:-1] == "N") & (labels[1:] == "N") & (rr > 300) & (rr < 2000)
     return t_ms[:-1][ok], rr[ok]
 
 
 def malik_filter(nn: np.ndarray) -> np.ndarray:
-    keep = np.ones(len(nn), bool); prev = None
+    keep = np.ones(len(nn), bool)
+    prev = None
     for j, v in enumerate(nn):
         if prev is not None and abs(v - prev) / prev > 0.20:
             keep[j] = False
@@ -53,38 +58,40 @@ def malik_filter(nn: np.ndarray) -> np.ndarray:
     return keep
 
 
-def hrv(nn: np.ndarray) -> dict:
+def hrv(nn: np.ndarray) -> Hrv:
     nn = nn[malik_filter(nn)].astype(float)
     d = np.diff(nn)
-    return {
-        "sdnn": round(float(nn.std()), 1),
-        "rmssd": round(float(np.sqrt(np.mean(d ** 2))), 1),
-        "pnn50": round(float((np.abs(d) > 50).mean() * 100), 1),
-        "mean_rr": round(float(nn.mean())),
-        "n": int(len(nn)),
-    }
+    return Hrv(
+        sdnn=round(float(nn.std()), 1),
+        rmssd=round(float(np.sqrt(np.mean(d**2))), 1),
+        pnn50=round(float((np.abs(d) > 50).mean() * 100), 1),
+        mean_rr=round(float(nn.mean())),
+        n=len(nn),
+    )
 
 
-def hr_per_minute(t_nn: np.ndarray, nn: np.ndarray, total_ms: int) -> list:
+def hr_per_minute(t_nn: np.ndarray, nn: np.ndarray, total_ms: int) -> list[float | None]:
     n_min = int(total_ms // 60000) + 1
     idx = (t_nn // 60000).astype(int)
-    out = [None] * n_min
-    sums = np.bincount(idx, weights=nn, minlength=n_min); cnt = np.bincount(idx, minlength=n_min)
+    out: list[float | None] = [None] * n_min
+    sums = np.bincount(idx, weights=nn, minlength=n_min)
+    cnt = np.bincount(idx, minlength=n_min)
     for m in range(n_min):
         if cnt[m] >= 10:
-            out[m] = round(60000 * cnt[m] / sums[m], 1)
+            out[m] = round(float(60000 * cnt[m] / sums[m]), 1)
     return out
 
 
-def estimate_sleep(hr_min: list, min_len: int = 45, merge_gap: int = 20) -> list[list[int]]:
-    """Sleep from heart rate alone (no diary): 15-min rolling median HR below the
-    midpoint between the record's 10th percentile and its median, sustained >= 45 min.
-    Returned as [start_minute, end_minute) pairs; labelled 'ориентировочно' in the UI."""
+def estimate_sleep(
+    hr_min: list[float | None], min_len: int = 45, merge_gap: int = 20
+) -> list[list[int]]:
+    """Сон по одной ЧСС, без дневника; критерий — docs/modules/analysis.md."""
     arr = np.array([np.nan if v is None else float(v) for v in hr_min])
     n = len(arr)
     med = np.full(n, np.nan)
     for i in range(n):
-        w = arr[max(0, i - 7): i + 8]; w = w[~np.isnan(w)]
+        w = arr[max(0, i - 7) : i + 8]
+        w = w[~np.isnan(w)]
         if len(w) >= 5:
             med[i] = np.median(w)
     ok = ~np.isnan(med)
@@ -115,93 +122,185 @@ def per_minute_counts(t_ms: np.ndarray, total_ms: int) -> list[int]:
     return np.bincount((t_ms // 60000).astype(int), minlength=n_min).astype(int).tolist()
 
 
-def runs(indices: np.ndarray, min_len: int):
+def runs(indices: np.ndarray, min_len: int) -> list[np.ndarray]:
     if len(indices) == 0:
         return []
-    return [g for g in np.split(indices, np.where(np.diff(indices) != 1)[0] + 1) if len(g) >= min_len]
+    return [
+        g for g in np.split(indices, np.where(np.diff(indices) != 1)[0] + 1) if len(g) >= min_len
+    ]
 
 
 GapCheck = Callable[[int, int], tuple[bool, str]]
-
-
 MissedCheck = Callable[[int, int], tuple[bool, str]]
 
 
-def extract_episodes(t_ms: np.ndarray, labels: np.ndarray, audits: dict[int, BeatAudit],
-                     noise10: np.ndarray, sharp10: np.ndarray, window_s: int, gap_check: GapCheck,
-                     missed_check: MissedCheck | None = None) -> list[Episode]:
-    """`noise10` (HF + drift) decides whether a pause is real; `sharp10` (HF only) decides
-    which blocks become "Помеха" rows: drift is shaded on the timeline but must not bury
-    the pauses and runs in the triage list."""
+def extract_episodes(
+    t_ms: np.ndarray,
+    labels: np.ndarray,
+    audits: dict[int, BeatAudit],
+    noise10: np.ndarray,
+    sharp10: np.ndarray,
+    window_s: int,
+    gap_check: GapCheck,
+    missed_check: MissedCheck | None = None,
+) -> list[Episode]:
+    """Паузы решает `noise10` (ВЧ + дрейф), строки «Помеха» — `sharp10` (только ВЧ)."""
     eps: list[Episode] = []
     rr = np.diff(t_ms)
 
     def noise_at(t0: int, t1: int) -> float:
-        a = int(t0 / 1000 / window_s); b = max(a + 1, int(t1 / 1000 / window_s) + 1)
+        a = int(t0 / 1000 / window_s)
+        b = max(a + 1, int(t1 / 1000 / window_s) + 1)
         return float(noise10[a:b].max()) if a < len(noise10) else 0.0
 
-    # pauses reported by the device (RR > 2000 ms)
     for k in np.where(rr > 2000)[0]:
-        t0, t1 = int(t_ms[k]), int(t_ms[k + 1]); nz = noise_at(t0, t1)
+        t0, t1 = int(t_ms[k]), int(t_ms[k + 1])
+        nz = noise_at(t0, t1)
         bad, why = gap_check(t0, t1)
         if bad or nz >= 0.5:
             reason = why if bad else f"помеха в окне {nz:.0%}"
-            eps.append(Episode(len(eps), "pause", t0, t1 - t0, f"«Пауза» {(t1 - t0) / 1000:.1f} с",
-                               "artifact", 0.9, [reason], [int(k), int(k + 1)]))
+            eps.append(
+                Episode(
+                    len(eps),
+                    "pause",
+                    t0,
+                    t1 - t0,
+                    f"«Пауза» {(t1 - t0) / 1000:.1f} с",
+                    "artifact",
+                    0.9,
+                    [reason],
+                    [int(k), int(k + 1)],
+                )
+            )
         else:
-            eps.append(Episode(len(eps), "pause", t0, t1 - t0, f"Пауза {(t1 - t0) / 1000:.1f} с",
-                               "review", 0.6, [why], [int(k), int(k + 1)]))
+            eps.append(
+                Episode(
+                    len(eps),
+                    "pause",
+                    t0,
+                    t1 - t0,
+                    f"Пауза {(t1 - t0) / 1000:.1f} с",
+                    "review",
+                    0.6,
+                    [why],
+                    [int(k), int(k + 1)],
+                )
+            )
 
-    # ventricular runs on audited labels
     v_idx = np.array([k for k, a in audits.items() if a.label == "V" and a.verdict in KEEP], int)
     v_idx.sort()
     for g in runs(v_idx, 2):
-        rr_run = np.diff(t_ms[g]); rate = 60000 / rr_run.mean()
+        rr_run = np.diff(t_ms[g])
+        rate = 60000 / rr_run.mean()
         conf = float(np.mean([audits[int(k)].confidence for k in g]))
         kind = "пара" if len(g) == 2 else f"×{len(g)}"
-        eps.append(Episode(len(eps), "v-run", int(t_ms[g[0]]), int(t_ms[g[-1]] - t_ms[g[0]]),
-                           f"ЖЭС {kind}, {rate:.0f}/мин", "likely" if conf >= 0.7 else "review", round(conf, 2),
-                           [f"QRS {', '.join(f'{audits[int(k)].width_ms:.0f}' for k in g)} мс"], [int(k) for k in g]))
-    # device runs that did NOT survive the audit -> artifact episodes
+        widths = ", ".join(f"{audits[int(k)].width_ms:.0f}" for k in g)
+        eps.append(
+            Episode(
+                len(eps),
+                "v-run",
+                int(t_ms[g[0]]),
+                int(t_ms[g[-1]] - t_ms[g[0]]),
+                f"ЖЭС {kind}, {rate:.0f}/мин",
+                "likely" if conf >= 0.7 else "review",
+                round(conf, 2),
+                [f"QRS {widths} мс"],
+                [int(k) for k in g],
+            )
+        )
+    # Серии прибора, не пережившие аудит, остаются в списке как артефакты: врач должен
+    # видеть, что «ЖЭС ×3» разобрана, а не потеряна.
     dev_v = np.where(labels == "V")[0]
     for g in runs(dev_v, 3):
         if all(audits[int(k)].verdict not in KEEP for k in g):
-            rr_run = np.diff(t_ms[g]); rate = 60000 / rr_run.mean()
-            why = sorted({VERDICT_RU.get(audits[int(k)].verdict, audits[int(k)].verdict) for k in g})
-            eps.append(Episode(len(eps), "v-run", int(t_ms[g[0]]), int(t_ms[g[-1]] - t_ms[g[0]]),
-                               f"«ЖЭС ×{len(g)}, {rate:.0f}/мин»", "artifact", 0.85,
-                               [f"все {len(g)} {plural(len(g), 'метка отклонена', 'метки отклонены', 'меток отклонены')}: {', '.join(why)}"], [int(k) for k in g]))
+            rr_run = np.diff(t_ms[g])
+            rate = 60000 / rr_run.mean()
+            why = sorted(
+                {VERDICT_RU.get(audits[int(k)].verdict, audits[int(k)].verdict) for k in g}
+            )
+            rejected = plural(len(g), "метка отклонена", "метки отклонены", "меток отклонены")
+            eps.append(
+                Episode(
+                    len(eps),
+                    "v-run",
+                    int(t_ms[g[0]]),
+                    int(t_ms[g[-1]] - t_ms[g[0]]),
+                    f"«ЖЭС ×{len(g)}, {rate:.0f}/мин»",
+                    "artifact",
+                    0.85,
+                    [f"все {len(g)} {rejected}: {', '.join(why)}"],
+                    [int(k) for k in g],
+                )
+            )
 
-    # supraventricular runs: rate must jump above the preceding sinus rate
     dev_s = np.where(labels == "S")[0]
     for g in runs(dev_s, 3):
-        rr_run = np.diff(t_ms[g]); rate = 60000 / rr_run.mean()
-        prev = [rr[j] for j in range(max(0, g[0] - 6), g[0] - 1) if labels[j] == "N" and labels[j + 1] == "N"]
+        rr_run = np.diff(t_ms[g])
+        rate = 60000 / rr_run.mean()
+        prev = [
+            rr[j]
+            for j in range(max(0, g[0] - 6), g[0] - 1)
+            if labels[j] == "N" and labels[j + 1] == "N"
+        ]
         prev_rate = 60000 / float(np.median(prev)) if prev else float("nan")
         kept = [int(k) for k in g if audits[int(k)].verdict in KEEP]
         if len(kept) < 3:
-            bad = sorted({VERDICT_RU.get(audits[int(k)].verdict, audits[int(k)].verdict) for k in g if audits[int(k)].verdict not in KEEP})
-            eps.append(Episode(len(eps), "s-run", int(t_ms[g[0]]), int(t_ms[g[-1]] - t_ms[g[0]]),
-                               f"«НЖЭС ×{len(g)}, {rate:.0f}/мин»", "artifact", 0.8,
-                               [f"подтверждено {len(kept)} из {len(g)}: {', '.join(bad)}"], [int(k) for k in g]))
+            bad = sorted(
+                {
+                    VERDICT_RU.get(audits[int(k)].verdict, audits[int(k)].verdict)
+                    for k in g
+                    if audits[int(k)].verdict not in KEEP
+                }
+            )
+            eps.append(
+                Episode(
+                    len(eps),
+                    "s-run",
+                    int(t_ms[g[0]]),
+                    int(t_ms[g[-1]] - t_ms[g[0]]),
+                    f"«НЖЭС ×{len(g)}, {rate:.0f}/мин»",
+                    "artifact",
+                    0.8,
+                    [f"подтверждено {len(kept)} из {len(g)}: {', '.join(bad)}"],
+                    [int(k) for k in g],
+                )
+            )
         elif prev_rate == prev_rate and rate < 1.15 * prev_rate:
-            eps.append(Episode(len(eps), "s-run", int(t_ms[g[0]]), int(t_ms[g[-1]] - t_ms[g[0]]),
-                               f"«НЖТ ×{len(g)}, {rate:.0f}/мин»", "artifact", 0.8,
-                               [f"синус до эпизода {prev_rate:.0f}/мин, скачка частоты нет"],
-                               [int(k) for k in g]))
+            eps.append(
+                Episode(
+                    len(eps),
+                    "s-run",
+                    int(t_ms[g[0]]),
+                    int(t_ms[g[-1]] - t_ms[g[0]]),
+                    f"«НЖТ ×{len(g)}, {rate:.0f}/мин»",
+                    "artifact",
+                    0.8,
+                    [f"синус до эпизода {prev_rate:.0f}/мин, скачка частоты нет"],
+                    [int(k) for k in g],
+                )
+            )
         else:
-            eps.append(Episode(len(eps), "s-run", int(t_ms[g[0]]), int(t_ms[g[-1]] - t_ms[g[0]]),
-                               f"НЖЭС ×{len(g)}, {rate:.0f}/мин", "review", 0.6,
-                               [f"синус до эпизода {prev_rate:.0f}/мин"], [int(k) for k in g]))
+            eps.append(
+                Episode(
+                    len(eps),
+                    "s-run",
+                    int(t_ms[g[0]]),
+                    int(t_ms[g[-1]] - t_ms[g[0]]),
+                    f"НЖЭС ×{len(g)}, {rate:.0f}/мин",
+                    "review",
+                    0.6,
+                    [f"синус до эпизода {prev_rate:.0f}/мин"],
+                    [int(k) for k in g],
+                )
+            )
 
-    # errors of omission: an RR of 1.6-2.4x the surrounding rhythm in clean signal, with a
-    # QRS-sized deflection near its middle, is a beat the detector skipped, not a pause
     if missed_check is not None and len(rr) > 16:
-        # one vectorised pass: median of the 8 RR before and 8 after every interval
-        # (a per-beat np.median over 100k beats cost 0.85 s of every recompute)
+        # Медиана 8 RR до и 8 после каждого интервала одним проходом: поштучный np.median
+        # на 100k комплексов стоил 0.85 с каждого пересчёта.
         from numpy.lib.stride_tricks import sliding_window_view
-        W = sliding_window_view(rr, 17)                                   # row j: rr[j:j+17], centre k = j + 8
-        med = np.median(np.concatenate([W[:, :8], W[:, 9:]], axis=1), axis=1)
+
+        windows = sliding_window_view(rr, 17)
+        med = np.median(np.concatenate([windows[:, :8], windows[:, 9:]], axis=1), axis=1)
         ks = np.arange(8, len(rr) - 8)
         x = rr[ks]
         for k in ks[(x >= 900) & (x < 2000) & (x >= 1.6 * med) & (x <= 2.4 * med)]:
@@ -210,14 +309,29 @@ def extract_episodes(t_ms: np.ndarray, labels: np.ndarray, audits: dict[int, Bea
                 continue
             hit, why = missed_check(int(t_ms[k]), int(t_ms[k + 1]))
             if hit:
-                eps.append(Episode(len(eps), "missed", int(t_ms[k]), int(rr[k]), f"Пропущен комплекс? RR {int(rr[k])} мс",
-                                   "review", 0.6, [why], [int(k), int(k + 1)]))
+                eps.append(
+                    Episode(
+                        len(eps),
+                        "missed",
+                        int(t_ms[k]),
+                        int(rr[k]),
+                        f"Пропущен комплекс? RR {int(rr[k])} мс",
+                        "review",
+                        0.6,
+                        [why],
+                        [int(k), int(k + 1)],
+                    )
+                )
 
-    # signal-loss blocks (>= 30 s of HF-bad signal); drift-only windows are shaded, not listed
-    bad = sharp10 >= 0.5
-    for g in runs(np.where(bad)[0], max(1, 30 // window_s)):
-        t0 = int(g[0] * window_s * 1000); t1 = int((g[-1] + 1) * window_s * 1000)
-        eps.append(Episode(len(eps), "noise", t0, t1 - t0, f"Помеха {(t1 - t0) / 1000:.0f} с", "artifact", 0.9, []))
+    bad_windows = sharp10 >= 0.5
+    for g in runs(np.where(bad_windows)[0], max(1, 30 // window_s)):
+        t0 = int(g[0] * window_s * 1000)
+        t1 = int((g[-1] + 1) * window_s * 1000)
+        eps.append(
+            Episode(
+                len(eps), "noise", t0, t1 - t0, f"Помеха {(t1 - t0) / 1000:.0f} с", "artifact", 0.9
+            )
+        )
     eps.sort(key=lambda e: e.t_ms)
     for n, e in enumerate(eps):
         e.id = n
