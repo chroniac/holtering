@@ -1,18 +1,57 @@
 [project]
-name = "holtering"
-version = "0.1.0"
-description = "Holter QC viewer: flags what the device got wrong before the cardiologist reads it"
-requires-python = ">=3.13"
+name = "holtering-workspace"
+version = "0.0.0"
+description = "Рабочее пространство holtering: парсер SCP-ECG LabTech и проверка холтеровской разметки"
+requires-python = ">=3.14"
 dependencies = [
-    "fastapi>=0.115",
-    "uvicorn>=0.30",
-    "numpy>=2.0",
+  "scp-holter",
+  "holtering",
+]
+
+[dependency-groups]
+dev = [
+  "ruff>=0.14",
+  "ty>=0.0.1a20",
+  "pytest>=8.4",
+  "pytest-cov>=6",
+  "import-linter>=2.3",
+  "httpx>=0.28",
 ]
 
 [tool.uv]
 package = false
 
-[dependency-groups]
-dev = [
-    "httpx2>=2.13.0",
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.uv.sources]
+scp-holter = { workspace = true }
+holtering = { workspace = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["error::DeprecationWarning"]
+
+[tool.coverage.run]
+source = ["scp_holter", "holtering"]
+
+[tool.ty.environment]
+root = ["packages/scp-holter", "packages/holtering", "."]
+
+[tool.importlinter]
+root_packages = ["scp_holter", "holtering"]
+
+[[tool.importlinter.contracts]]
+name = "парсер не знает о приложении"
+type = "forbidden"
+source_modules = ["scp_holter"]
+forbidden_modules = ["holtering"]
+
+[[tool.importlinter.contracts]]
+name = "слои приложения: cli → api → анализ"
+type = "layers"
+layers = [
+  "holtering.cli",
+  "holtering.api",
+  "holtering.analysis",
 ]

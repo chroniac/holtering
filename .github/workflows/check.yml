@@ -1,0 +1,45 @@
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: python3 scripts/check_comment_blocks.py
+      - if: github.event_name == 'pull_request'
+        run: python3 scripts/check_commits.py --range "origin/${{ github.base_ref }}..HEAD"
+
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.14"
+      - run: uv lock --check
+      - run: uv sync --group dev
+      - run: uv run ruff check . && uv run ruff format --check .
+      - run: uv run ty check
+      - run: uv run lint-imports
+      - run: uv run pytest -q
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run check
+      - run: bun run comments
+      - run: bun run typecheck
+      - run: bun run build

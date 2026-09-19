@@ -1,0 +1,19 @@
+[project]
+name = "scp-holter"
+version = "0.1.1"
+description = "Чтение SCP-ECG экспорта LabTech EC-12H / CardioSpy: секции, отведения, сигнал, EDF+/SVG"
+requires-python = ">=3.14"
+dependencies = [
+  "numpy>=2.0",
+]
+
+[project.scripts]
+scp-holter = "scp_holter.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.9,<0.10"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "scp_holter"
+module-root = ""

@@ -1,0 +1,46 @@
+target-version = "py314"
+line-length = 100
+extend-exclude = ["docs", "frontend"]
+
+[lint]
+select = [
+  "E", "W", "F",       # pycodestyle, pyflakes
+  "I",                 # isort
+  "B",                 # bugbear
+  "UP",                # pyupgrade
+  "SIM",               # simplify
+  "RUF",               # ruff-specific
+  "ERA",               # закомментированный код
+  "T20",               # print в коде
+  "PT",                # pytest style
+  "ASYNC",             # блокирующие вызовы в async
+  "S",                 # bandit
+  "N",                 # naming
+  "C4",                # comprehensions
+  "RET", "PIE", "TID",
+]
+ignore = [
+  "E501",              # длину держит форматтер
+  "S101",              # assert в тестах
+  "RUF001", "RUF002", "RUF003",  # кириллица в строках и комментариях
+]
+
+[lint.per-file-ignores]
+"tests/**" = ["S", "PT011", "TID251"]
+"scripts/**" = ["T20", "S603", "S607"]
+"packages/holtering/holtering/settings.py" = ["TID251"]
+"packages/scp-holter/scp_holter/cli.py" = ["T20"]
+
+[lint.flake8-tidy-imports.banned-api]
+"os.environ".msg = "окружение читает только holtering.settings; остальной код получает Settings из DI"
+"os.getenv".msg = "окружение читает только holtering.settings; остальной код получает Settings из DI"
+
+[lint.isort]
+known-first-party = ["scp_holter", "holtering", "tests"]
+
+[lint.pydocstyle]
+convention = "google"
+
+[format]
+quote-style = "double"
+docstring-code-format = true
