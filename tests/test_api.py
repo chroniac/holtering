@@ -129,3 +129,16 @@ def test_raw_returns_exactly_the_requested_int16_window(
     assert response.status_code == 200
     assert response.headers["X-Fs"] == str(record.fs)
     assert len(response.content) == 2 * 2 * record.fs
+
+
+def test_missing_cache_dir_is_created(record: Synthetic, tmp_path: Path) -> None:
+    cache_dir = tmp_path / "nested" / "cache"
+    settings = Settings(
+        record={"scp": record.scp, "qrs": record.qrs, "cache_dir": cache_dir},
+        api={"static_dir": None},
+    )
+
+    build(settings.record)
+
+    assert cache_dir.is_dir()
+    assert list(cache_dir.glob("*.json"))

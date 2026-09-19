@@ -26,6 +26,10 @@ versions are semver by Conventional Commits. Every change adds a line under
 - The synthetic record has a circadian heart rate (night dip to ~54/min), so sleep estimation
   and day/night statistics are exercised on a 24-hour run.
 
+### Fixed
+- An explicit `cache_dir` that does not exist yet is created on start instead of crashing on
+  the first cache write (regression of the settings move; covered by a test).
+
 ### Changed
 - uv workspace of two packages: `packages/scp-holter` (parser, CLI `scp-holter`) and
   `packages/holtering` (analysis, API, CLI `holtering`); Python ≥ 3.14; the boundaries are held by
