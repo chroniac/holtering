@@ -1,6 +1,4 @@
-"""Command line front end: python -m scp_holter <cmd> FILE.scp [OUT] [options]."""
-
-from __future__ import annotations
+"""Командная строка: scp-holter <cmd> FILE.scp [OUT] [options]."""
 
 import argparse
 
@@ -9,19 +7,20 @@ from .record import ScpHolter
 
 EPILOG = """\
 examples:
-  python -m scp_holter info data/raw.scp
-  python -m scp_holter svg  data/raw.scp out/strip.svg --start 10800 --dur 10
-  python -m scp_holter svg  data/raw.scp out/strip.svg --leads II,V2,V5 --gain 10
-  python -m scp_holter edf  data/raw.scp out/full.edf
-  python -m scp_holter edf  data/raw.scp out/flip.edf --invert --chest V1,V2,V3,V4,V5,V6
+  scp-holter info data/raw.scp
+  scp-holter svg  data/raw.scp out/strip.svg --start 10800 --dur 10
+  scp-holter svg  data/raw.scp out/strip.svg --leads II,V2,V5 --gain 10
+  scp-holter edf  data/raw.scp out/full.edf
+  scp-holter edf  data/raw.scp out/flip.edf --invert --chest V1,V2,V3,V4,V5,V6
 """
 
 
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
-        prog="scp_holter",
+        prog="scp-holter",
         description="Read LabTech EC-12H / CardioSpy SCP-ECG Holter exports.",
-        epilog=EPILOG, formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     ap.add_argument("cmd", choices=["info", "svg", "npy", "csv", "edf"])
     ap.add_argument("scp")
@@ -30,12 +29,16 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--dur", type=float, default=None, help="seconds (svg default 10)")
     ap.add_argument("--leads", default=None, help="comma list to plot, e.g. II,V2,V5")
     ap.add_argument("--gain", type=float, default=None, help="svg mm per mV (default: auto)")
-    ap.add_argument("--invert", action="store_true",
-                    help="negate all samples: makes the limb QRS/T and an ascending chest "
-                         "order textbook-normal, at the cost of a negative P axis "
-                         "(see scp_holter.leads)")
-    ap.add_argument("--chest", default=None,
-                    help="label channels 6..11 explicitly, e.g. V1,V2,V3,V4,V5,V6")
+    ap.add_argument(
+        "--invert",
+        action="store_true",
+        help="negate all samples: makes the limb QRS/T and an ascending chest "
+        "order textbook-normal, at the cost of a negative P axis "
+        "(see docs/modules/scp-holter.md)",
+    )
+    ap.add_argument(
+        "--chest", default=None, help="label channels 6..11 explicitly, e.g. V1,V2,V3,V4,V5,V6"
+    )
     return ap
 
 
@@ -56,8 +59,16 @@ def main(argv: list[str] | None = None) -> int:
         ap.error("output path required")
 
     if args.cmd == "svg":
-        print(to_svg(rec, args.out, args.start, 10.0 if args.dur is None else args.dur,
-                     args.leads.split(",") if args.leads else None, mm_mv=args.gain))
+        print(
+            to_svg(
+                rec,
+                args.out,
+                args.start,
+                10.0 if args.dur is None else args.dur,
+                args.leads.split(",") if args.leads else None,
+                mm_mv=args.gain,
+            )
+        )
     elif args.cmd == "npy":
         print(to_npy(rec, args.out, args.start, args.dur))
     elif args.cmd == "csv":

@@ -1,15 +1,9 @@
-"""EDF+C writer: 1-second data records, int16 passthrough, lossless.
+"""Запись EDF+C: записи по 1 секунде, int16 без пересчёта, без потерь."""
 
-EDF headers are strict fixed-width ASCII, so the cp1251 patient name has to be
-transliterated and dates rendered as dd-MMM-yyyy. The digital range is
-asymmetric (-32768..32767), and pairing it with a symmetric physical range is
-what makes 1 LSB drift off the declared AVM - hence the separate phys_min/max.
-"""
+import numpy as np
 
-from __future__ import annotations
-
-from ..leads import CHEST_NOTE, LIMB6
-from ..record import ScpHolter
+from scp_holter.leads import CHEST_NOTE, LIMB6
+from scp_holter.record import ScpHolter
 
 MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
 CHUNK_SECONDS = 600
@@ -21,16 +15,17 @@ _CYRILLIC = {
     "ч": "ch", "ш": "sh", "щ": "shch", "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu",
     "я": "ya", "і": "i", "ғ": "g", "қ": "q", "ң": "ng", "ө": "o", "ұ": "u", "ү": "u",
     "һ": "h", "ә": "a",
-}
+}  # fmt: skip
 
 
 def field(value: object, width: int) -> bytes:
+    """Одно поле заголовка EDF: строгий ASCII фиксированной ширины, добитый пробелами."""
     b = str(value).encode("ascii", "replace")[:width]
     return b + b" " * (width - len(b))
 
 
 def translit(s: str | None) -> str:
-    out = []
+    out: list[str] = []
     for ch in s or "":
         low = ch.lower()
         if low in _CYRILLIC:
@@ -50,27 +45,28 @@ def edf_date(iso: object, fallback: str = "X") -> str:
         return fallback
 
 
-def _patient_field(patient: dict) -> str:
+def _patient_field(patient: dict[str, object]) -> str:
     name = translit(f"{patient.get('first_name', '')}_{patient.get('last_name', '')}")
     name = name.strip("_ ").replace(" ", "_")
-    return (f"{patient.get('patient_id', 'X')} {patient.get('sex', 'X')} "
-            f"{edf_date(patient.get('dob', ''))} {name or 'X'}")
+    return (
+        f"{patient.get('patient_id', 'X')} {patient.get('sex', 'X')} "
+        f"{edf_date(patient.get('dob', ''))} {name or 'X'}"
+    )
 
 
 def _transducer(rec: ScpHolter, i: int) -> str:
     return "Holter limb" if i < len(LIMB6) else f"Holter chest; {CHEST_NOTE}"
 
 
-def to_edf(rec: ScpHolter, out: str, start: float = 0.0,
-           dur: float | None = None) -> tuple[str, int]:
-    import numpy as np
-
-    fs = int(round(rec.fs))
+def to_edf(
+    rec: ScpHolter, out: str, start: float = 0.0, dur: float | None = None
+) -> tuple[str, int]:
+    fs = round(rec.fs)
     if abs(fs - rec.fs) > 1e-9:
         raise ValueError(f"non-integer sample rate: {rec.fs} Hz")
 
-    a = int(round(start * fs))
-    total = rec.n_samples - a if dur is None else int(round(dur * fs))
+    a = round(start * fs)
+    total = rec.n_samples - a if dur is None else round(dur * fs)
     total = max(0, min(total, rec.n_samples - a))
     nrec = total // fs
     nl = rec.n_leads
@@ -78,7 +74,7 @@ def to_edf(rec: ScpHolter, out: str, start: float = 0.0,
     p = rec.patient
     acq_date = str(p.get("acq_date") or "1985-01-01").split("-")
     acq_time = str(p.get("acq_time") or "00:00:00").split(":")
-    # 1 LSB must map to exactly avm nV, so mirror the asymmetric digital range.
+    # 1 LSB обязан равняться объявленному AVM, поэтому физический диапазон тоже асимметричен.
     phys_min = -32768 * rec.avm_nv / 1e6
     phys_max = 32767 * rec.avm_nv / 1e6
 
@@ -98,8 +94,12 @@ def to_edf(rec: ScpHolter, out: str, start: float = 0.0,
     with open(out, "wb") as fh:
         fh.write(field(0, 8))
         fh.write(field(_patient_field(p), 80))
-        fh.write(field(f"Startdate {edf_date(p.get('acq_date', ''), '01-JAN-1985')} "
-                       f"X X LabTech_EC-12H", 80))
+        fh.write(
+            field(
+                f"Startdate {edf_date(p.get('acq_date', ''), '01-JAN-1985')} X X LabTech_EC-12H",
+                80,
+            )
+        )
         fh.write(field(f"{int(acq_date[2]):02d}.{int(acq_date[1]):02d}.{acq_date[0][2:]}", 8))
         fh.write(field(f"{int(acq_time[0]):02d}.{int(acq_time[1]):02d}.{int(acq_time[2]):02d}", 8))
         fh.write(field(256 * (nl + 1), 8))
@@ -114,8 +114,8 @@ def to_edf(rec: ScpHolter, out: str, start: float = 0.0,
         mm = rec.memmap()
         for r0 in range(0, nrec, CHUNK_SECONDS):
             k = min(CHUNK_SECONDS, nrec - r0)
-            blk = np.asarray(mm[:, a + r0 * fs: a + (r0 + k) * fs])   # (nl, k*fs)
-            blk = blk.reshape(nl, k, fs).transpose(1, 0, 2)           # (k, nl, fs)
+            blk = np.asarray(mm[:, a + r0 * fs : a + (r0 + k) * fs])
+            blk = blk.reshape(nl, k, fs).transpose(1, 0, 2)
             if rec.inverted:
                 blk = np.clip(-blk.astype(np.int32), -32768, 32767)
             fh.write(np.ascontiguousarray(blk, dtype="<i2").tobytes())

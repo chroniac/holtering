@@ -1,17 +1,4 @@
-"""SCP-ECG container framing: the 6-byte preamble and the Section 0 pointer table.
-
-Layout as written by LabTech EC-12H / CardioSpy:
-
-    preamble : CRC-CCITT(2, LE) + record length(4, LE)   -- length == file size
-    section  : CRC(2) ID(2) length(4) version(1) protocol(1) reserved(6) + body
-    Section 0: 10 bytes per entry -> ID(2) length(4) index(4, 1-based file offset)
-
-Two vendor quirks live here: `reserved` is zeroed instead of holding "SCPECG",
-and the section version byte is 10. Strict SCP parsers reject the file on both,
-which is why this package does its own framing instead of using a generic reader.
-"""
-
-from __future__ import annotations
+"""Обвязка контейнера SCP-ECG: преамбула и таблица указателей секции 0."""
 
 from dataclasses import dataclass
 from typing import BinaryIO
@@ -22,20 +9,20 @@ POINTER_LEN = 10
 
 
 def u16(b: bytes, o: int = 0) -> int:
-    return int.from_bytes(b[o:o + 2], "little")
+    return int.from_bytes(b[o : o + 2], "little")
 
 
 def u32(b: bytes, o: int = 0) -> int:
-    return int.from_bytes(b[o:o + 4], "little")
+    return int.from_bytes(b[o : o + 4], "little")
 
 
 @dataclass(frozen=True, slots=True)
 class Section:
-    """One entry of the Section 0 pointer table."""
+    """Одна запись таблицы указателей секции 0."""
 
     id: int
     length: int
-    index: int          # 1-based file offset of the section header
+    index: int
 
     @property
     def header_offset(self) -> int:
@@ -64,7 +51,7 @@ class Container:
 
 
 def read_container(fh: BinaryIO) -> Container:
-    """Parse the preamble and Section 0; empty sections are dropped."""
+    """Разбирает преамбулу и секцию 0; пустые секции отбрасываются."""
     pre = fh.read(PREAMBLE_LEN)
     if len(pre) < PREAMBLE_LEN:
         raise ValueError("file shorter than the SCP-ECG preamble")
@@ -85,6 +72,6 @@ def read_container(fh: BinaryIO) -> Container:
 
 
 def read_body(fh: BinaryIO, sec: Section) -> bytes:
-    """Read a section's payload, skipping its 16-byte header."""
+    """Тело секции без её 16-байтового заголовка."""
     fh.seek(sec.body_offset)
     return fh.read(sec.body_length)

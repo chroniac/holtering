@@ -1,4 +1,4 @@
-"""Exporters for a parsed record."""
+"""Экспортеры разобранной записи: EDF+, SVG, .npy, .csv."""
 
 from .arrays import to_csv, to_npy
 from .edf import to_edf
