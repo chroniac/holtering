@@ -36,7 +36,12 @@ def test_ecg_window_past_the_record_is_rejected(client: TestClient, record: Synt
 
 
 def test_ecg_unknown_lead_is_rejected(client: TestClient) -> None:
-    assert client.get("/api/ecg", params={"leads": "II,V9"}).status_code == 400
+    rejected = client.get("/api/ecg", params={"leads": "II,V9"})
+
+    assert rejected.status_code == 400
+    assert rejected.headers["content-type"].startswith("application/problem+json")
+    assert rejected.json()["title"] == "Bad Request"
+    assert rejected.json()["detail"].startswith("unknown lead")
     assert client.get("/api/ecg", params={"leads": "II,ch7"}).status_code == 200
 
 
@@ -49,7 +54,12 @@ def test_window_length_limits_are_enforced(client: TestClient) -> None:
 
 def test_beat_outside_the_record_is_not_found(client: TestClient) -> None:
     assert client.get("/api/beat/0").status_code == 200
-    assert client.get("/api/beat/999999").status_code == 404
+
+    missing = client.get("/api/beat/999999")
+
+    assert missing.status_code == 404
+    assert missing.headers["content-type"].startswith("application/problem+json")
+    assert missing.json() == {"status": 404, "title": "Not Found", "detail": "no such beat"}
 
 
 def test_manual_label_changes_the_verdict_and_survives_restart(
