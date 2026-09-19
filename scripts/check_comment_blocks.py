@@ -48,7 +48,7 @@ def tracked_python_files() -> list[Path]:
     out = subprocess.run(
         ["git", "ls-files", "-z", "--", "*.py"], check=True, capture_output=True
     ).stdout
-    return [Path(name) for name in out.decode().split("\0") if name]
+    return [p for name in out.decode().split("\0") if name and (p := Path(name)).exists()]
 
 
 def main(argv: list[str]) -> int:
