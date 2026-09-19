@@ -39,9 +39,15 @@ def capture(out: Path, work: Path) -> None:
             if response.headers.get("content-type", "").startswith("application/json")
             else response.content.hex()
         )
+        # Контракт /api/raw живёт в заголовках (X-Fs, X-Start, X-Mv-Per-Lsb), у остальных — media type.
+        headers = {
+            k.lower(): v
+            for k, v in response.headers.items()
+            if k.lower() == "content-type" or k.lower().startswith("x-")
+        }
         (out / f"{name}.json").write_text(
             json.dumps(
-                {"status": response.status_code, "body": body},
+                {"status": response.status_code, "headers": headers, "body": body},
                 ensure_ascii=False,
                 sort_keys=True,
                 indent=1,
@@ -118,6 +124,8 @@ def compare(left: Path, right: Path) -> int:
             continue
         if da["status"] >= 400:
             continue
+        if da.get("headers") != db.get("headers"):
+            problems.append(f"{name}: заголовки различаются")
         if strip(da["body"]) != strip(db["body"]):
             problems.append(f"{name}: тело различается")
     for line in problems:

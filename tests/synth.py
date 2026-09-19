@@ -1,8 +1,6 @@
 """Синтетическая запись LabTech в формате, который читает `scp_holter`: 12 отведений, 125 Гц,
 известные удары и известные ошибки прибора — чтобы тесты и смоук не зависели от реальных данных."""
 
-from __future__ import annotations
-
 import binascii
 import struct
 from dataclasses import dataclass, field
@@ -97,7 +95,7 @@ def _rhythm(seconds: int, rng: np.random.Generator) -> tuple[list[Beat], tuple[i
         if event == "fakeV":
             beats[-1] = Beat(t, "N", "V")
         if event == "double":
-            beats.append(Beat(t + 200, "X", "N"))
+            beats.append(Beat(t + 200, "X", "V"))
         if event == "pause":
             pause = (t, t + 2500)
             t += 2500
