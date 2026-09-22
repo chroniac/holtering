@@ -20,11 +20,13 @@ printed protocol.
 
 ## What comes next
 
-Delivery to doctors is a web application on our server ([ADR 0001](adr/0001-web-app-not-desktop-exe.md)).
-Until then the code has no record registry (currently one process is one
-record), no file upload with client-side pseudonymisation of section 1, no
-accounts, no server-side PDF printing. Each of these steps gets its own ADR
-before the code.
+Delivery to doctors is a web application on our server ([ADR 0001](adr/0001-web-app-not-desktop-exe.md)),
+and that server is one workstation in Kazakhstan: the registry, the upload and
+the accounts are decided in [ADR 0003](adr/0003-registry-on-a-personal-host.md),
+and what the data is protected from — the operator of that machine included —
+in [ADR 0004](adr/0004-what-the-data-is-protected-from.md). The code has none of
+it yet: one process is still one record, there is no upload, no accounts and no
+server-side PDF printing.
 
 ## Conventions
 

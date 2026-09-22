@@ -13,3 +13,5 @@ line with a link.
 |---|---|---|---|
 | [0001](0001-web-app-not-desktop-exe.md) | Delivery to doctors is a web application on our server, not a desktop exe | accepted | 2026-09-19 |
 | [0002](0002-stack.md) | Stack and rules: Litestar, uv workspace, ruff/ty, msgspec, Dishka, pydantic-settings | accepted | 2026-09-19 |
+| [0003](0003-registry-on-a-personal-host.md) | A record registry on one personal machine: upload, SQLite, one open record | accepted | 2026-09-22 |
+| [0004](0004-what-the-data-is-protected-from.md) | What the doctor's data is protected from, and what it is not | accepted | 2026-09-22 |

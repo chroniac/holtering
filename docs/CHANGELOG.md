@@ -9,6 +9,10 @@ versions are semver by Conventional Commits. Every change adds a line under
 ### Added
 - ADR 0001 (delivery is a web application, not an exe) and ADR 0002 (stack: Litestar,
   uv workspace, ruff/ty, msgspec, Dishka, pydantic-settings).
+- ADR 0003 (a record registry on one personal machine: the four-file upload, SQLite,
+  one open record per process) and ADR 0004 (what the doctor's data is protected from:
+  pseudonymisation in the browser, the print path, the exposure, accounts, retention —
+  and the operator of the host, who cannot be locked out and is told so).
 - Development rules: `AGENTS.md`, `docs/`, `ruff.toml`, `.editorconfig`, pre-commit,
   `scripts/check_{comment_blocks,commits}.py`, CI GitHub Actions (`hygiene`, `python`, `web`).
 - Synthetic record `tests/synth.py` (12 leads, 125 Hz, known beats and device
