@@ -5,6 +5,8 @@ from msgspec import Struct, field
 
 from .quality import local_noise
 
+KEEP = {"likely", "uncertain", "manual"}  # вердикты, при которых метка всё ещё считается эктопией
+
 VERDICT_RU = {
     "likely": "вероятная",
     "uncertain": "спорная",
@@ -12,7 +14,9 @@ VERDICT_RU = {
     "on-wave": "не на QRS",
     "noisy": "в помехе",
     "narrow": "узкий QRS",
+    "too-wide": "ширина вне физиологичной",
     "not-premature": "не преждевременная",
+    "on-schedule": "по синусовому графику",
     "sinus-shape": "синусовая морфология",
     "manual": "ручная",
     "manual-N": "ручная: N",
@@ -24,6 +28,12 @@ WIDTH_FRAC = 0.15  # порог наклона, калиброван на мед
 WIDTH_GAP_S = 0.008  # перешагиваемый провал в серии наклона (один отсчёт на 125 Гц)
 SLOPE_SMOOTH_S = 0.024  # сглаживание |dx| (три отсчёта на 125 Гц)
 AMP_HALF_S, WIDTH_HALF_S, EDGE_S = 0.048, 0.16, 0.2
+# Потолок с запасом на разброс оценки: одна и та же форма на synth меряется 160 и 208 мс.
+WIDTH_MAX_MS = 240.0
+PREMATURE_MAX = 0.9  # экстрасистола преждевременна по определению — для V и для S
+# Опора на ритм: ближние интервалы, а внутри серии эктопических меток пары N→N рядом нет.
+RHYTHM_NEAR, RHYTHM_LOOKBACK = 6, 20
+NOISE_AMP_FRAC = 0.25  # шум крупнее четверти амплитуды QRS съедает ширину (порог наклона 15 %)
 
 
 def _n(seconds: float, fs: int, at_least: int = 1) -> int:
@@ -146,6 +156,18 @@ class BeatAuditor:
             ]
         return float(np.median(ws)) if ws else float("nan")
 
+    def _rhythm_rr(self, k: int) -> float | None:
+        """Опора для преждевременности: ближние N→N, а внутри серии меток — сколько найдётся."""
+        for back in (RHYTHM_NEAR, RHYTHM_LOOKBACK):
+            prev = [
+                self.rr[j]
+                for j in range(max(0, k - back), k - 1)
+                if self.lab[j] == "N" and self.lab[j + 1] == "N"
+            ]
+            if prev:
+                return float(np.median(prev))
+        return None
+
     def audit(self, k: int) -> BeatAudit:
         t = int(self.t[k])
         lab = str(self.lab[k])
@@ -172,19 +194,16 @@ class BeatAuditor:
         win_noise = float(self.noise10[wi])
         ref = self.hour_amp.get(h) or float("nan")
         b.amp_ratio = round(self._amp(i) / ref, 3) if ref == ref and ref > 0 else None
-        b.noise_ratio = round(local_noise(self.mm, self.fs, self.mv, i) / self.noise_base, 2)
+        noise_mv = local_noise(self.mm, self.fs, self.mv, i)
+        b.noise_ratio = round(noise_mv / self.noise_base, 2)
         b.width_ms = round(self._width(i), 1)
         b.width_ratio = (
             round(b.width_ms / self.n_width, 2) if self.n_width == self.n_width else None
         )
 
-        prev = [
-            self.rr[j]
-            for j in range(max(0, k - 6), k - 1)
-            if self.lab[j] == "N" and self.lab[j + 1] == "N"
-        ]
-        if rr_pre is not None and prev:
-            b.prematurity = round(rr_pre / float(np.median(prev)), 2)
+        rhythm = self._rhythm_rr(k)
+        if rr_pre is not None and rhythm:
+            b.prematurity = round(rr_pre / rhythm, 2)
 
         if rr_pre is not None and rr_pre < 300:
             b.verdict, b.confidence = "double-count", 0.95
@@ -192,16 +211,31 @@ class BeatAuditor:
         elif b.amp_ratio is not None and b.amp_ratio < 0.5:
             b.verdict, b.confidence = "on-wave", 0.9
             b.reasons.append(f"амплитуда {b.amp_ratio:.0%} от соседних N: метка не на QRS")
-        elif b.noise_ratio > 2.5 or win_noise >= 0.5:
+        elif (
+            b.noise_ratio > 2.5
+            or win_noise >= 0.5
+            or (ref == ref and noise_mv > NOISE_AMP_FRAC * ref)
+        ):
             b.verdict, b.confidence = "noisy", 0.5
-            b.reasons.append(
-                f"помеха в этом окне ({win_noise:.0%})"
-                if win_noise >= 0.5
-                else (
+            if win_noise >= 0.5:
+                b.reasons.append(f"помеха в этом окне ({win_noise:.0%})")
+            elif ref == ref and noise_mv > NOISE_AMP_FRAC * ref:
+                b.reasons.append(f"шум {noise_mv / ref:.0%} от амплитуды QRS: форма не читается")
+            else:
+                b.reasons.append(
                     "сильный шум в этом месте"
                     if b.noise_ratio >= 4
                     else "заметный шум в этом месте"
                 )
+        elif b.width_ms is not None and b.width_ms > WIDTH_MAX_MS:
+            b.verdict, b.confidence = "too-wide", 0.85
+            b.reasons.append(f"ширина {b.width_ms:.0f} мс: столько не длится ни один QRS")
+        elif b.prematurity is not None and b.prematurity > PREMATURE_MAX:
+            b.verdict, b.confidence = "not-premature", 0.7
+            b.reasons.append(
+                f"не преждевременная: RR {rr_pre} мс, ритм до неё {rr_pre / b.prematurity:.0f}"
+                if rr_pre is not None
+                else "не преждевременная"
             )
         elif lab == "V":
             if b.width_ratio is not None and b.width_ratio >= 1.4:
@@ -219,19 +253,48 @@ class BeatAuditor:
                 )
         elif lab == "S":
             before = rr_pre / b.prematurity if rr_pre is not None and b.prematurity else 0.0
-            if b.prematurity is not None and b.prematurity > 0.9:
-                b.verdict, b.confidence = "not-premature", 0.7
-                b.reasons.append(f"не преждевременная: RR {rr_pre} мс, ритм до неё {before:.0f}")
-            else:
-                b.reasons.append(
-                    f"преждевременная: RR {rr_pre} мс при ритме {before:.0f}"
-                    if b.prematurity
-                    else "узкий QRS"
-                )
+            b.reasons.append(
+                f"преждевременная: RR {rr_pre} мс при ритме {before:.0f}"
+                if b.prematurity
+                else "узкий QRS"
+            )
         return b
 
     def audit_all(self) -> list[BeatAudit]:
         return [self.audit(int(k)) for k in np.where(self.lab != "N")[0]]
+
+
+SCHEDULE_TOL = 0.10  # настолько синусовый цикл плавает от дыхания
+
+
+def apply_schedule_evidence(audits: list[BeatAudit], t_ms: np.ndarray, labels: np.ndarray) -> None:
+    """Проход по расписанию синуса: метка после отклонённой соседки, пришедшая точно в срок,
+    и есть очередной синусовый комплекс — преждевременной её сделала соседка."""
+    by_index = {a.index: a for a in audits}
+    for a in audits:
+        prev = by_index.get(a.index - 1)
+        if a.verdict not in ("likely", "uncertain") or prev is None or prev.verdict in KEEP:
+            continue
+        k = a.index
+        j = k - 1
+        while j >= 0 and labels[j] != "N":
+            j -= 1
+        sinus = [
+            t_ms[i + 1] - t_ms[i]
+            for i in range(max(0, j - 5), j)
+            if labels[i] == "N" and labels[i + 1] == "N"
+        ]
+        if j < 0 or not sinus:
+            continue
+        rr = float(np.median(sinus))
+        gap = float(t_ms[k] - t_ms[j])
+        cycles = max(1, round(gap / rr))
+        if abs(gap - cycles * rr) <= SCHEDULE_TOL * rr:
+            a.verdict, a.confidence = "on-schedule", 0.8
+            a.reasons.append(
+                f"пришёл в срок по синусовому графику ({gap:.0f} мс при цикле {rr:.0f}): "
+                f"очередной синусовый комплекс, преждевременным его сделала отклонённая соседняя метка"
+            )
 
 
 FAMILY_MIN = 10  # меньшие группы не имеют статистического веса

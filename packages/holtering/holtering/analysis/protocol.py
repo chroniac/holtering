@@ -21,6 +21,7 @@ SECTIONS = [
     "supraventricular",
     "brady",
     "conduction",
+    "intervals",
     "symptoms",
     "quality",
     "resume",
@@ -32,6 +33,7 @@ SECTION_TITLES = {
     "supraventricular": "Наджелудочковая эктопия",
     "brady": "Брадиаритмии и паузы",
     "conduction": "Фибрилляция предсердий, проводимость",
+    "intervals": "Интервалы PQ, QT, сегмент ST",
     "symptoms": "Симптомы по дневнику",
     "quality": "Качество записи",
     "resume": "Заключение",
@@ -138,6 +140,11 @@ class Protocol:
         self.kept_s = np.array(sorted(a.t_ms for a in kept if a.label == "S"), np.int64)
         self.real = [e for e in st.episodes if e.verdict != "artifact"]
 
+    def kept_in(self, runs: list[Episode]) -> int:
+        """Комплексов в залпах: в эпизоде остаются и отклонённые метки, считаем подтверждённые."""
+        audits = self.st.audits
+        return sum(1 for e in runs for k in e.beats if k in audits and audits[k].verdict in KEEP)
+
     def clk(self, ms: float) -> str:
         return (self.st.start + timedelta(milliseconds=ms)).strftime("%H:%M")
 
@@ -146,7 +153,9 @@ class Protocol:
         h, c, r = self.sm.hr, self.sm.counts, self.sm.record
         ci = round(h.day / h.night, 2) if h.day and h.night else None
         out: dict[str, str] = {}
+        hours, minutes = divmod(round(r.duration_s / 60), 60)
         out["rhythm"] = (
+            f"Мониторирование длилось {hours} ч {minutes:02d} мин, проанализировано {r.beats} комплексов. "
             f"Основной ритм синусовый. ЧСС средняя за сутки {h.mean} уд/мин, минимальная {h.min} уд/мин ({self.clk(h.min_at_s * 1000)}), "
             f"максимальная {h.max} уд/мин ({self.clk(h.max_at_s * 1000)}). Средняя дневная {h.day if h.day is not None else '—'}, средняя ночная {h.night if h.night is not None else '—'} уд/мин"
             + (f"; циркадный индекс {ci:.2f} (норма 1,22–1,45)" if ci else "")
@@ -160,7 +169,9 @@ class Protocol:
         trip = [e for e in runs if len(e.beats) >= 3]
         morph = self.sm.morphologies
         pct = 100 * v_audited / r.beats
-        vt = f"Желудочковая экстрасистолия {density_class(pct)}: {v_likely}–{v_audited} за сутки ({100 * v_likely / r.beats:.2f}–{pct:.2f}% комплексов), "
+        lo_pct = 100 * v_likely / r.beats
+        share = f"{pct:.2f}%" if f"{lo_pct:.2f}" == f"{pct:.2f}" else f"{lo_pct:.2f}–{pct:.2f}%"
+        vt = f"Желудочковая экстрасистолия {density_class(pct)}: {v_likely}–{v_audited} за сутки ({share} комплексов), "
         vt += (
             "мономорфная"
             if len(morph) == 1
@@ -170,12 +181,13 @@ class Protocol:
         )
         ctype = circadian_type(self.kept_v, self.sleep)
         vt += f", циркадный тип {ctype}. " if ctype else ". "
-        vt += f"Парных {pairs}. " if pairs else "Парных нет. "
+        in_runs = self.kept_in(runs)
         vt += (
-            f"Групповых (3 и более): {len(trip)} ({', '.join(f'{self.clk(e.t_ms)} ×{len(e.beats)}' for e in trip)}). "
-            if trip
-            else "Групповых (3 и более) нет. "
+            f"Из них одиночных {max(0, v_audited - in_runs)}, парных {pairs}, "
+            f"групповых {len(trip)}. "
         )
+        if trip:
+            vt += f"Групповые: {', '.join(f'{self.clk(e.t_ms)} ×{len(e.beats)}' for e in trip)}. "
         rej = c.device.V - v_audited
         vt += f"Прибор насчитал {c.device.V}; {rej} {plural(rej, 'метка отклонена', 'метки отклонены', 'меток отклонены')} при проверке (двойной счёт, метки вне QRS, синусовая морфология, помехи)."
         out["ventricular"] = vt
@@ -185,8 +197,10 @@ class Protocol:
         stt = f"Наджелудочковая экстрасистолия {density_class(spct)}: {s_audited} за сутки ({spct:.2f}% комплексов)"
         sct = circadian_type(self.kept_s, self.sleep)
         stt += f", циркадный тип {sct}. " if sct else ". "
+        s_in_runs = self.kept_in(s_runs)
+        stt += f"Из них одиночных {max(0, s_audited - s_in_runs)}, в группах {s_in_runs}. "
         stt += (
-            f"Групповых: {len(s_runs)} ({', '.join(f'{self.clk(e.t_ms)} {e.title}' for e in s_runs)}). "
+            f"Групповые: {', '.join(f'{self.clk(e.t_ms)} {e.title}' for e in s_runs)}. "
             if s_runs
             else "Пароксизмов наджелудочковой тахикардии не зарегистрировано. "
         )
@@ -210,6 +224,27 @@ class Protocol:
             f"Фибрилляция предсердий: скрининг по нерегулярности RR — {af.value if af else '—'}; оценка по зубцам P за врачом. "
             "АВ-проводимость по автоматическим данным не оценивается: без разметки зубцов P блокады II–III степени исключаются только визуально."
         )
+        iv = self.sm.intervals
+        it = "Интервал PQ автоматически не измеряется: зубец P мельче уровня помех отведения и различим только на усреднённом комплексе, где его начало смещается до 70 мс от выбора правила; оценка — по фрагментам. "
+        if iv.qtc_ms is not None and iv.qtc_max is not None:
+            it += (
+                f"Интервал QT {iv.qt_ms} мс, корригированный QTc {iv.qtc_ms} мс "
+                f"(по формуле Базетта, усреднённый комплекс {iv.hours} {plural(iv.hours, 'час', 'часа', 'часов')}, "
+                f"разброс QTc {iv.qtc_min}–{iv.qtc_max} мс). "
+            )
+            it += (
+                "Удлинения QTc свыше 480 мс не зарегистрировано. "
+                if iv.qtc_max < 480
+                else "Зарегистрированы часы с QTc свыше 480 мс — требуется просмотр врачом. "
+            )
+        else:
+            it += "Интервал QT измерить не удалось: усреднённый комплекс не набрался. "
+        it += (
+            "Сегмент ST: смещения в милливольтах не оцениваются, масштаб напряжения экспорта не калиброван."
+            if not r.gain_verified
+            else f"Сегмент ST: масштаб калиброван по распечатке CardioSpy (коэффициент {r.gain:g}), смещения оцениваются врачом по фрагментам."
+        )
+        out["intervals"] = it
         evs = st.events_with_context()
         if evs:
             rows = []
@@ -242,9 +277,9 @@ class Protocol:
             else "Ручных правок разметки нет. "
         )
         if r.gain_verified:
-            qt += f"Масштаб напряжения калиброван по распечатке CardioSpy (коэффициент {r.gain:g}). Интервал QT не оценивался: частота дискретизации 125 Гц."
+            qt += f"Масштаб напряжения калиброван по распечатке CardioSpy (коэффициент {r.gain:g})."
         else:
-            qt += "Масштаб напряжения экспорта не калиброван: амплитуды на фрагментах приведены без масштаба, сегмент ST, зубец T и вольтаж не оценивались. Интервал QT не оценивался: частота дискретизации 125 Гц."
+            qt += "Масштаб напряжения экспорта не калиброван: амплитуды на фрагментах приведены без масштаба, смещение ST, амплитуда T и вольтаж не оценивались; на длительности, в том числе на QT, масштаб не влияет."
         out["quality"] = qt
         res = f"Синусовый ритм со средней ЧСС {h.mean} уд/мин (мин. {h.min}, макс. {h.max})"
         res += f", циркадный индекс {ci:.2f}. " if ci else ". "

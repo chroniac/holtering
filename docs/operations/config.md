@@ -40,7 +40,8 @@ typo.
 An empty `cache_dir` means the directory of the record itself. That way the
 cache and the overrides travel with the patient, and the directory is known to
 be writable. Two files appear in it: the heavy-pass cache (the name includes the
-size, mtime, `gain` and `invert`) and
+size, mtime, `gain`, `invert` and the number of the audit rules — the cache holds
+verdicts, so changing the thresholds must not leave the old ones in place) and
 `<name>.<patient id>.<date>.overrides.json` with the manual labels, the diary
 and the protocol edits.
 

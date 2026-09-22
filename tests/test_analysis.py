@@ -4,7 +4,9 @@ import numpy as np
 import pytest
 
 from holtering.analysis import State, build
-from holtering.analysis.rhythm import KEEP, estimate_sleep, nn_intervals, runs
+from holtering.analysis.beats import BeatAudit, apply_schedule_evidence
+from holtering.analysis.intervals import measure_qt
+from holtering.analysis.rhythm import KEEP, estimate_sleep, hr_extremes, nn_intervals, runs
 from holtering.settings import RecordSettings
 from tests.synth import Synthetic
 
@@ -26,6 +28,58 @@ def test_nn_intervals_keep_only_plausible_sinus_pairs() -> None:
     _, with_ectopy = nn_intervals(t_ms, np.array(["N", "N", "V", "N", "N", "N"]))
 
     assert with_ectopy.tolist() == [800, 800]  # пары с меткой V не в счёт
+
+
+def test_hr_extremes_report_the_window_not_the_minute() -> None:
+    slow = np.arange(0, 60_000, 1000)  # 60 уд/мин
+    fast = slow[-1] + np.arange(1, 41) * 375  # 15 с по 160 уд/мин
+    tail = fast[-1] + np.arange(1, 61) * 1000
+
+    lo, _, hi, at = hr_extremes(np.concatenate([slow, fast, tail]).astype(np.int64))
+
+    assert round(lo) == 60
+    assert round(hi) == 160  # поминутное среднее на этой записи не превысило бы 100
+    assert abs(at - (slow[-1] + 7500)) < 1500
+
+
+def test_on_schedule_label_after_a_rejected_one_is_not_an_extrasystole() -> None:
+    t = np.array([0, 800, 1600, 2000, 2400, 3200, 4000], np.int64)
+    labels = np.array(["N", "N", "N", "S", "S", "N", "N"])
+    intruder = BeatAudit(index=3, t_ms=2000, label="S", verdict="on-wave", confidence=0.9)
+    on_time = BeatAudit(index=4, t_ms=2400, label="S", verdict="likely", confidence=0.8)
+
+    apply_schedule_evidence([intruder, on_time], t, labels)
+
+    assert on_time.verdict == "on-schedule"  # 2400 = 1600 + один синусовый цикл
+
+    couplet = [
+        BeatAudit(index=3, t_ms=2000, label="S", verdict="likely", confidence=0.8),
+        BeatAudit(index=4, t_ms=2400, label="S", verdict="likely", confidence=0.8),
+    ]
+    apply_schedule_evidence(couplet, t, labels)
+
+    assert [a.verdict for a in couplet] == ["likely", "likely"]  # соседка настоящая — это куплет
+
+
+def test_measure_qt_finds_the_end_of_a_triangular_t_wave() -> None:
+    w = np.zeros(121, np.float32)
+    w[50:54] = [0.3, 1.0, -0.4, 0.0]  # QRS начинается на 50-м отсчёте
+    w[70:80] = np.linspace(0, 0.3, 10)  # T: линейный подъём
+    w[80:90] = np.linspace(0.3, 0, 10)  # и линейный спуск в изолинию на 90-м
+    got = measure_qt(w, 125, 800.0)
+
+    assert got is not None
+    qt, qtc = got
+    assert abs(qt - 320) <= 16  # 40 отсчётов по 8 мс, допуск — один отсчёт на границу
+    assert round(qtc) == round(qt / 800.0**0.5 * 1000**0.5)
+
+
+def test_intervals_are_measured_on_the_record(state: State) -> None:
+    iv = state.analysis.summary.intervals
+
+    assert iv.hours >= 1
+    assert iv.qtc_ms is not None
+    assert 300 <= iv.qtc_ms <= 500
 
 
 def test_runs_groups_consecutive_indices_of_minimum_length() -> None:

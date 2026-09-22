@@ -37,10 +37,12 @@ Every ectopic label from the device gets features and a verdict with reasons
 |---|---|
 | `double-count` | coupling interval shorter than 300 ms — physiologically impossible |
 | `on-wave` | amplitude below 50 % of the neighbouring sinus beats: the label is not on a QRS |
-| `noisy` | local high-frequency noise above 2.5× the record's baseline, or the window is in noise |
+| `noisy` | local noise above 2.5× the record's baseline or above 25 % of the QRS amplitude, or the window is in noise |
+| `too-wide` | the measured QRS is wider than 240 ms: the width was read off an artefact |
 | `narrow` | a V label, but the QRS is no wider than the sinus one |
 | `sinus-shape` | a V label, but the complex belongs to a morphology family that is >90 % sinus |
-| `not-premature` | an S label, but the complex is not premature against the preceding rhythm |
+| `not-premature` | the complex is not premature against the preceding rhythm |
+| `on-schedule` | the label came on the sinus schedule after a rejected one: the ordinary sinus beat |
 | `uncertain` | borderline QRS width or contradictory features — for the reviewer |
 | `likely` | passed every check |
 

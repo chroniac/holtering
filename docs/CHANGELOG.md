@@ -25,12 +25,46 @@ versions are semver by Conventional Commits. Every change adds a line under
   endpoints, working set).
 - The synthetic record has a circadian heart rate (night dip to ~54/min), so sleep estimation
   and day/night statistics are exercised on a 24-hour run.
+- The note answers the same list of questions the recorder's own protocol prints: the
+  duration of the monitoring and the number of analysed complexes, the ectopy split into
+  single, paired and group beats, and a new section "Интервалы PQ, QT, сегмент ST".
+  QT is measured there (`analysis/intervals.py`): an hourly median complex of lead II
+  built from up to 400 steady sinus beats, QRS bounds by the 15 % slope threshold, end of
+  T by the tangent at its steepest descent, QTc by Bazett — QT 401 ms / QTc 426 ms on the
+  reference record against the device's 420 ms. PQ and ST are declared unmeasured with
+  the reason: two reasonable rules for the onset of P disagree by up to 70 ms on that
+  record, and an ST shift in millimetres needs the millivolt scale to be calibrated.
 
 ### Fixed
+- Heart rate now matches what the recorder's own protocol prints, because both numbers are
+  defined the same way: the mean comes from the Malik-filtered NN intervals (it was the
+  unfiltered mean, 70 against the device's 72 on the reference record), and the minimum and
+  maximum are the extremes of a sliding 15 s window instead of per-minute averages, which
+  compressed both tails (44/148 against 48/141; the times land within 3 s of the device's
+  strips). Calibrated against the CardioSpy protocol of a real 24-hour record — see
+  `docs/modules/analysis.md`.
 - An explicit `cache_dir` that does not exist yet is created on start instead of crashing on
   the first cache write (regression of the settings move; covered by a test).
 
 ### Changed
+- Four checks in the label audit, each of which the reference record showed the device
+  violating in bulk: prematurity is now required of a `V` label as well (an extrasystole is
+  premature by definition — it used to be asked of `S` only), a measured QRS wider than
+  240 ms is `too-wide` (no complex lasts that long; the ceiling leaves room for the width
+  estimator, which reads the same synthetic shape as 160 and 208 ms), local noise above 25 %
+  of the hour's QRS amplitude is `noisy` (the width is read off a 15 % slope threshold, so
+  noise of that size eats the feature), and a label that arrives on the sinus schedule right
+  after a rejected label is `on-schedule` — it is the ordinary sinus beat, made "premature"
+  by its bogus neighbour. On the reference record the audit keeps 32 V and 58 S out of the
+  device's 412 and 264, where it used to keep 104 and 117; the cardiologist's own reading of
+  that record is 13 and 9, and the single ventricular pair and the absence of pauses, runs
+  and AF now agree with his protocol exactly.
+- The heavy-pass cache file carries the number of the audit rules (`-a2`): the cache stores
+  verdicts, and its key was only the record's size, mtime, gain and inversion, so after a
+  threshold change an existing cache would have kept serving the old verdicts.
+- The rhythm reference for prematurity falls back to 20 intervals when no N→N pair is found
+  within the usual six: inside a run of ectopic labels the reference disappeared exactly
+  where it was needed, and a whole run of mislabelled sinus beats stayed `likely`.
 - uv workspace of two packages: `packages/scp-holter` (parser, CLI `scp-holter`) and
   `packages/holtering` (analysis, API, CLI `holtering`); Python ≥ 3.14; the boundaries are held by
   `import-linter` (`holtering.cli` → `holtering.api` → `holtering.analysis`).

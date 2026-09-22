@@ -20,6 +20,9 @@ from pydantic_settings import (
 CONFIG_DIR_ENV = "HOLTERING_CONFIG_DIR"
 DEFAULT_CONFIG_DIR = Path()
 CONFIG_FILE = "holtering.toml"
+# Вердикты лежат в кэше тяжёлого прохода: поменялись пороги аудита — номер растёт,
+# иначе старый кэш молча отдаёт вердикты по прежним правилам.
+HEAVY_CACHE_VERSION = 3
 DEFAULT_STATIC_DIR = Path(__file__).resolve().parents[3] / "frontend" / "dist"
 
 
@@ -50,7 +53,10 @@ class RecordSettings(Section):
         stat = self.scp.stat()
         gain = f"-g{self.gain:g}" if self.gain is not None else ""
         invert = "-inv" if self.invert else ""
-        name = f"{self.scp.stem}-{stat.st_size}-{int(stat.st_mtime)}{gain}{invert}.json"
+        name = (
+            f"{self.scp.stem}-{stat.st_size}-{int(stat.st_mtime)}{gain}{invert}"
+            f"-a{HEAVY_CACHE_VERSION}.json"
+        )
         return self.cache_root / name
 
 

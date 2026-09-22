@@ -14,7 +14,9 @@ from msgspec import Struct, field
 from holtering.settings import RecordSettings
 
 from . import templates as tpl
-from .beats import BeatAudit, BeatAuditor, apply_family_evidence
+from .beats import BeatAudit, BeatAuditor, apply_family_evidence, apply_schedule_evidence
+from .intervals import Intervals
+from .intervals import measure as measure_intervals
 from .quality import (
     INDEPENDENT,
     WINDOW_S,
@@ -29,8 +31,10 @@ from .rhythm import (
     Hrv,
     estimate_sleep,
     extract_episodes,
+    hr_extremes,
     hr_per_minute,
     hrv,
+    malik_filter,
     nn_intervals,
     per_minute_counts,
 )
@@ -128,6 +132,7 @@ class HeavyPass(Struct):
     minute_hr: list[float | None]
     hrv: Hrv
     sleep: list[list[int]]
+    intervals: Intervals
 
 
 class Patient(Struct):
@@ -219,6 +224,7 @@ class Summary(Struct):
     record: Record
     hr: HeartRate
     hrv: Hrv
+    intervals: Intervals
     counts: Counts
     calibration: Calibration
     criteria: list[Criterion]
@@ -369,6 +375,7 @@ class State:
         w, valid = tpl.beat_windows(self.rec.read_lead, n, self.fs, self.mv, self.t_ms)
         assign, _ = tpl.cluster(w, valid)
         apply_family_evidence(audits, assign, self.labels)
+        apply_schedule_evidence(audits, self.t_ms, self.labels)
         verdicts = {a.index: a.verdict for a in audits}
         templates = tpl.summarise(w, assign, self.labels, verdicts, self.fs)
         t_nn, nn = nn_intervals(self.t_ms, self.labels)
@@ -389,6 +396,7 @@ class State:
             minute_hr=hr_min,
             hrv=hrv(nn),
             sleep=estimate_sleep(hr_min),
+            intervals=measure_intervals(self.mm, self.fs, self.mv, self.t_ms, self.labels),
         )
 
     def set_label(self, index: int, label: str | None) -> None:
@@ -466,10 +474,19 @@ class State:
             lo, hi = np.searchsorted(self.dev_t, q.t0_ms), np.searchsorted(self.dev_t, q.t1_ms)
             touched += [int(k) for k in range(lo, hi) if self.dev_labels[k] != "N"]
         if touched:
-            fresh = [self.auditor.audit(k) for k in sorted(set(touched))]
+            # Соседки тоже переаудируются: вердикт `on-schedule` держится на том, что
+            # предыдущая метка отклонена, а правка качества могла её вернуть.
+            around = {k + d for k in touched for d in (-1, 0, 1)}
+            fresh = [
+                self.auditor.audit(k)
+                for k in sorted(around)
+                if 0 <= k < len(self.dev_labels) and self.dev_labels[k] != "N"
+            ]
             apply_family_evidence(fresh, self.dev_template, self.dev_labels)
             for audit in fresh:
                 self.auto_audits[audit.index] = audit
+            # Соседка переаудированной метки могла остаться вне `fresh`: расписание — по всем.
+            apply_schedule_evidence(list(self.auto_audits.values()), self.dev_t, self.dev_labels)
 
     def add_event(self, t_ms: int, text: str) -> EventContext:
         eid = 1 + max((e.id for e in self.events), default=0)
@@ -620,8 +637,9 @@ class State:
             ),
         )
         hr_min = base.minute_hr
-        hr_vals = np.array([v for v in hr_min if v is not None])
         _, nn = nn_intervals(self.t_ms, labels)
+        nn_clean = nn[malik_filter(nn)]
+        hr_lo, hr_lo_ms, hr_hi, hr_hi_ms = hr_extremes(self.t_ms)
 
         def clock_hour(ms: float) -> float:
             d = self.start + timedelta(milliseconds=ms)
@@ -652,9 +670,6 @@ class State:
         for a in audits.values():
             verdict_counts.setdefault(a.label, {}).setdefault(a.verdict, 0)
             verdict_counts[a.label][a.verdict] += 1
-        hr_arr = np.array([v if v is not None else np.nan for v in hr_min], float)
-        i_min = int(np.nanargmin(hr_arr))
-        i_max = int(np.nanargmax(hr_arr))
         real_pauses = [e for e in episodes if e.kind == "pause" and e.verdict != "artifact"]
         longest_pause = max((e.dur_ms for e in real_pauses), default=0)
         v_runs = [e for e in episodes if e.kind == "v-run" and e.verdict != "artifact"]
@@ -702,11 +717,11 @@ class State:
                     clean_pct=round(float((self.noise10 < 0.5).mean() * 100), 2),
                 ),
                 hr=HeartRate(
-                    mean=round(float(60000 / nn.mean())),
-                    min=round(float(hr_vals.min())),
-                    max=round(float(hr_vals.max())),
-                    min_at_s=i_min * 60 + 30,
-                    max_at_s=i_max * 60 + 30,
+                    mean=round(float(60000 / nn_clean.mean())),
+                    min=round(hr_lo),
+                    max=round(hr_hi),
+                    min_at_s=hr_lo_ms // 1000,
+                    max_at_s=hr_hi_ms // 1000,
                     night=round(float(np.mean(night))) if night else None,
                     day=round(float(np.mean(day))) if day else None,
                     sleep=round(float(np.mean(sl))) if sl else None,
@@ -715,6 +730,7 @@ class State:
                     pct_under_50=round(float((60000 / nn < 50).mean() * 100), 2),
                 ),
                 hrv=base.hrv,
+                intervals=base.intervals,
                 counts=Counts(
                     device=DeviceCounts(
                         N=int((self.dev_labels == "N").sum()),

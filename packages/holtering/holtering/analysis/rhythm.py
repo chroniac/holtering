@@ -5,9 +5,7 @@ from collections.abc import Callable
 import numpy as np
 from msgspec import Struct, field
 
-from .beats import VERDICT_RU, BeatAudit
-
-KEEP = {"likely", "uncertain", "manual"}  # вердикты, при которых метка всё ещё считается эктопией
+from .beats import KEEP, VERDICT_RU, BeatAudit
 
 
 class Episode(Struct):
@@ -39,10 +37,41 @@ def plural(n: int, one: str, few: str, many: str) -> str:
     return many
 
 
+MIN_RR_MS, MAX_RR_MS = 300, 2000  # физиологичный интервал: всё вне — не пара ударов подряд
+
+
 def nn_intervals(t_ms: np.ndarray, labels: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     rr = np.diff(t_ms)
-    ok = (labels[:-1] == "N") & (labels[1:] == "N") & (rr > 300) & (rr < 2000)
+    ok = (labels[:-1] == "N") & (labels[1:] == "N") & (rr > MIN_RR_MS) & (rr < MAX_RR_MS)
     return t_ms[:-1][ok], rr[ok]
+
+
+HR_WINDOW_S = 15.0  # окно усреднения ЧСС; калибровка — docs/modules/analysis.md
+
+
+def hr_extremes(t_ms: np.ndarray, window_s: float = HR_WINDOW_S) -> tuple[float, int, float, int]:
+    """Крайние ЧСС по скользящему окну: мин, его середина (мс), макс, его середина."""
+    t = t_ms.astype(np.float64)
+    idx = np.arange(len(t))
+    last = np.searchsorted(t, t + window_s * 1000.0, side="right") - 1
+    inside = last - idx
+    rr = np.diff(t)
+    ok = np.concatenate([[0], np.cumsum(((rr > MIN_RR_MS) & (rr < MAX_RR_MS)).astype(np.int64))])
+    span = t[np.clip(last, 0, len(t) - 1)] - t
+    # Окно должно быть полным: на хвосте записи и у края артефактного провала оно
+    # схлопывается до пары ударов, и двойной счёт в нём превращается в «максимум».
+    good = (inside >= 2) & (span >= window_s * 1000.0 - MAX_RR_MS)
+    good &= ok[np.clip(last, 0, len(rr))] - ok[idx] == inside
+    if not good.any():
+        return float("nan"), 0, float("nan"), 0
+    hr = np.where(good, 60000.0 * inside / np.maximum(span, 1.0), np.nan)
+    lo, hi = int(np.nanargmin(hr)), int(np.nanargmax(hr))
+    return (
+        float(hr[lo]),
+        int(t[lo] + span[lo] / 2),
+        float(hr[hi]),
+        int(t[hi] + span[hi] / 2),
+    )
 
 
 def malik_filter(nn: np.ndarray) -> np.ndarray:

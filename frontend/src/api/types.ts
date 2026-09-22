@@ -24,6 +24,13 @@ export interface Summary {
     pct_over_100: number;
     pct_under_50: number;
   };
+  intervals: {
+    qt_ms: number | null;
+    qtc_ms: number | null;
+    qtc_min: number | null;
+    qtc_max: number | null;
+    hours: number;
+  };
   hrv: { sdnn: number; rmssd: number; pnn50: number; mean_rr: number; n: number };
   counts: {
     device: { N: number; V: number; S: number };
@@ -82,7 +89,9 @@ export type Verdict =
   | "on-wave"
   | "noisy"
   | "narrow"
+  | "too-wide"
   | "not-premature"
+  | "on-schedule"
   | "sinus-shape"
   | "manual"
   | "manual-N"

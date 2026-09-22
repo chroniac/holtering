@@ -20,8 +20,9 @@ Modules:
 The heavy pass (`State._heavy`) reads the whole signal: quality metrics per window, an
 audit of every ectopic label, shape clustering, per-minute heart rate and HRV. It does
 not depend on the reviewer's overrides and is cached as JSON next to the record (the
-name includes the file size and mtime, `gain` and `invert`, so substituting the record
-or the calibration yields a new cache).
+name includes the file size and mtime, `gain`, `invert` and the number of the audit
+rules, so substituting the record, the calibration or a threshold yields a new cache —
+the verdicts live in that file).
 
 The light pass (`State.recompute`) is recomputed on every override: merging device and
 inserted complexes, applying manual labels and manual quality ranges, extracting
@@ -97,10 +98,12 @@ reviewer can see **why** a label was downgraded:
 |---|---|
 | `double-count` | the coupling interval is shorter than 300 ms — physiologically impossible |
 | `on-wave` | amplitude below 50 % of the neighbouring N beats: the label is not on a QRS |
-| `noisy` | local HF noise above 2.5 of the record's baseline level, or the window is in noise |
+| `noisy` | local HF noise above 2.5 of the record's baseline level or above 25 % of the hour's QRS amplitude, or the window is in noise |
+| `too-wide` | the measured QRS is wider than 240 ms — no complex lasts that long, the width was read off an artefact |
 | `narrow` | a V label, but the QRS is no wider than the sinus one — this is not a ventricular complex |
 | `sinus-shape` | a V label, but the complex is in a morphology family with more than 90 % sinus beats |
-| `not-premature` | an S label, but the complex is not premature relative to the preceding sinus rhythm |
+| `not-premature` | the complex is not premature relative to the preceding sinus rhythm — an extrasystole is premature by definition |
+| `on-schedule` | the label arrived on the sinus schedule right after a rejected label: it is the ordinary sinus beat, its neighbour made it look premature |
 | `uncertain` | a V label with a QRS width of 1.1–1.4 of the sinus one, or contradictory features |
 | `likely` | passed every check |
 | `manual`, `manual-N`, `manual-X` | the reviewer's decision: ectopy, normal, artefact |
@@ -110,6 +113,26 @@ The verdicts `likely`, `uncertain` and `manual` count towards ectopy (`KEEP`).
 Amplitude is compared with the hourly median amplitude of sinus complexes, width — with
 the median sinus width across the whole record: both calibrations live in the heavy
 pass.
+
+Prematurity is the coupling interval over the median of the preceding N→N intervals —
+the last six, and, when a run of ectopic labels leaves no pair among them, the last
+twenty. The reference must not disappear exactly where a run needs it: without the
+fallback a whole run of mislabelled sinus beats keeps its `likely`.
+
+The upper bound on width is 240 ms rather than the ~200 ms of the widest ventricular
+complex, because at 125 Hz the estimator reads the same generated shape of `tests/synth.py`
+as 160 ms on one beat and 208 ms on the next; a tighter ceiling would reject real ectopy.
+The noise bound is relative to the signal, not only to the record: the width is measured
+at a 15 % slope threshold, so local noise above a quarter of the hour's QRS amplitude
+leaves nothing to measure, however noisy the record is on average.
+
+`apply_schedule_evidence` covers the device's most productive error on the reference
+record: a detection on an artefact, followed by the ordinary sinus beat, which the bogus
+neighbour turns into a "premature" one — 44 of 264 S labels there. A label is `on-schedule`
+when the preceding label was rejected by the audit and the interval from the last sinus
+beat is within 10 % of a whole number of sinus cycles: the rhythm never noticed this beat,
+so it is the beat the rhythm was due. Couplets survive it — a label whose preceding ectopic
+label was kept is not tested.
 
 ## Morphology families (`templates.py`, `apply_family_evidence`)
 
@@ -132,6 +155,54 @@ raised to `likely` and `narrow` — to `uncertain`. An S label in a family with 
 half of its members being PVCs is lowered to `uncertain`.
 
 A PVC morphology is a family that has retained no fewer than three confirmed V beats.
+
+## Heart rate: mean and extremes (`rhythm.hr_extremes`)
+
+The mean is taken over the NN intervals after the Malik filter — the same intervals HRV
+is computed on, so a single artefactual interval cannot move both numbers apart.
+
+The minimum and the maximum are the extremes of a sliding 15-second window (every
+interval inside it must lie in 300–2000 ms), and `min_at_s`/`max_at_s` are the middle of
+the winning window. The window length is calibrated: on a real 24-hour record the
+CardioSpy protocol reports 72 / 44 / 148 per minute, and the mean over the filtered NN
+with a 15 s window gives 72 / 44 / 148 at 06:49:58 and 20:24:09 against the device's
+06:50:01 and 20:24:11. Every width from 11 to 15 s rounds to the same pair; 15 s is the
+widest of them — 16 s already reads the maximum as 147. Per-minute averages, which this
+used to use, gave 48 and 141
+on the same record — averaging over a minute compresses both tails, and the printed
+number has to be comparable with the device's.
+
+Noisy windows are not excluded from the extremes: the maximum of this record lives inside
+the stair test, where the signal is barely readable, and it is a real finding — the noise
+map shades the strip so that the reviewer can judge it.
+
+## QT on the averaged complex (`intervals.py`)
+
+The printed protocol of the recorder states PQ, QT and ST, so the note has to answer the
+same three questions. One of them is answered with a measurement.
+
+QT is measured on an hourly median complex of lead II, built from up to 400 sinus beats
+that stand between sinus beats at a steady rate (RR 500–1500 ms on both sides) — the
+median kills the noise that makes a single beat unmeasurable at 125 Hz, and it is a
+median rather than a mean so that one artefact cannot bend the shape. The QRS bounds use
+the same 15 % slope threshold as the width, the baseline is the PQ segment before the
+complex, and the end of T is the intersection of the tangent at the steepest descent of
+T with that baseline. QTc is Bazett over the hour's median RR. The protocol prints the
+median across hours and the spread. On the reference record this gives QT 401 ms,
+QTc 426 ms (spread 404–463) against the CardioSpy protocol's QTc 420 ms.
+
+PQ is **not** measured, and the sampling rate is not the reason — 8 ms resolves a
+130–160 ms interval perfectly well. The reason is amplitude: on the reference record the
+baseline noise of lead II is 0.424 mV against a P wave of 0.1–0.25 mV, so P only exists
+after averaging, and there it is soft-edged. The same template supports two equally
+reasonable rules for the onset of P — a share of the P amplitude, or a share of its upstroke slope — and on the
+reference record they disagree by up to 70 ms (160–200 ms against 104–184 ms), where the
+device reads 130–160 ms. A number that depends on the choice of rule more than on the
+patient is not worth printing, so the section says so and leaves P to the reviewer.
+
+ST is not measured either, for a different reason: a shift is stated in millimetres, and
+the millivolt scale of the export is not calibrated (`gain`, see
+[modules/scp-holter](scp-holter.md)).
 
 ## Sleep from heart rate (`rhythm.estimate_sleep`)
 
